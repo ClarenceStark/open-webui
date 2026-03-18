@@ -199,6 +199,25 @@ def get_microsoft_entra_id_access_token():
         return None
 
 
+def is_responses_api(config: Optional[dict]) -> bool:
+    api_type = (config or {}).get("api_type")
+    return api_type in ("responses", "responses_v1")
+
+
+def is_azure_v1_responses_api(config: Optional[dict]) -> bool:
+    api_type = (config or {}).get("api_type")
+    return api_type == "responses_v1"
+
+
+def azure_uses_api_key_header(config: Optional[dict]) -> bool:
+    config = config or {}
+    auth_type = config.get("auth_type", "bearer")
+    if auth_type in ("azure_ad", "microsoft_entra_id"):
+        return False
+
+    return config.get("api_key_header", "api-key").lower() == "api-key"
+
+
 ##########################################
 #
 # API routes
@@ -677,12 +696,50 @@ async def verify_connection(
             )
 
             if api_config.get("azure", False):
-                # Only set api-key header if not using Azure Entra ID authentication
-                auth_type = api_config.get("auth_type", "bearer")
-                if auth_type not in ("azure_ad", "microsoft_entra_id"):
+                api_version = api_config.get("api_version", "") or "2023-03-15-preview"
+
+                if is_azure_v1_responses_api(api_config):
+                    model_ids = api_config.get("model_ids", [])
+                    if not model_ids:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Azure responses_v1 connections require model_ids",
+                        )
+
+                    async with session.post(
+                        url=f"{url}/openai/v1/responses",
+                        headers=headers,
+                        cookies=cookies,
+                        json={
+                            "model": model_ids[0],
+                            "input": "ping",
+                            "max_output_tokens": 1,
+                        },
+                        ssl=AIOHTTP_CLIENT_SESSION_SSL,
+                    ) as r:
+                        try:
+                            response_data = await r.json()
+                        except Exception:
+                            response_data = await r.text()
+
+                        if r.status != 200:
+                            if isinstance(response_data, (dict, list)):
+                                return JSONResponse(
+                                    status_code=r.status, content=response_data
+                                )
+                            else:
+                                return PlainTextResponse(
+                                    status_code=r.status, content=response_data
+                                )
+
+                        return {
+                            "object": "list",
+                            "data": [{"id": model_id} for model_id in model_ids],
+                        }
+
+                if azure_uses_api_key_header(api_config):
                     headers["api-key"] = key
 
-                api_version = api_config.get("api_version", "") or "2023-03-15-preview"
                 async with session.get(
                     url=f"{url}/openai/models?api-version={api_version}",
                     headers=headers,
@@ -885,7 +942,11 @@ def convert_to_responses_payload(payload: dict) -> dict:
     if system_content:
         responses_payload["instructions"] = system_content
 
-    if "max_tokens" in responses_payload:
+    if "max_completion_tokens" in responses_payload:
+        responses_payload["max_output_tokens"] = responses_payload.pop(
+            "max_completion_tokens"
+        )
+    elif "max_tokens" in responses_payload:
         responses_payload["max_output_tokens"] = responses_payload.pop("max_tokens")
 
     # Remove Chat Completions-only parameters not supported by the Responses API
@@ -1064,24 +1125,27 @@ async def generate_chat_completion(
         request, url, key, api_config, metadata, user=user
     )
 
-    is_responses = api_config.get("api_type") == "responses"
+    is_responses = is_responses_api(api_config)
+    is_responses_v1 = is_azure_v1_responses_api(api_config)
 
     if api_config.get("azure", False):
         api_version = api_config.get("api_version", "2023-03-15-preview")
-        request_url, payload = convert_to_azure_payload(url, payload, api_version)
-
-        # Only set api-key header if not using Azure Entra ID authentication
-        auth_type = api_config.get("auth_type", "bearer")
-        if auth_type not in ("azure_ad", "microsoft_entra_id"):
-            headers["api-key"] = key
-
-        headers["api-version"] = api_version
-
-        if is_responses:
+        if is_responses_v1:
             payload = convert_to_responses_payload(payload)
-            request_url = f"{request_url}/responses?api-version={api_version}"
+            request_url = f"{url}/openai/v1/responses"
         else:
-            request_url = f"{request_url}/chat/completions?api-version={api_version}"
+            request_url, payload = convert_to_azure_payload(url, payload, api_version)
+
+            if azure_uses_api_key_header(api_config):
+                headers["api-key"] = key
+
+            headers["api-version"] = api_version
+
+            if is_responses:
+                payload = convert_to_responses_payload(payload)
+                request_url = f"{request_url}/responses?api-version={api_version}"
+            else:
+                request_url = f"{request_url}/chat/completions?api-version={api_version}"
     else:
         if is_responses:
             payload = convert_to_responses_payload(payload)
@@ -1295,16 +1359,18 @@ async def responses(
         if api_config.get("azure", False):
             api_version = api_config.get("api_version", "2023-03-15-preview")
 
-            auth_type = api_config.get("auth_type", "bearer")
-            if auth_type not in ("azure_ad", "microsoft_entra_id"):
+            if azure_uses_api_key_header(api_config):
                 headers["api-key"] = key
 
-            headers["api-version"] = api_version
+            if is_azure_v1_responses_api(api_config):
+                request_url = f"{url}/openai/v1/responses"
+            else:
+                headers["api-version"] = api_version
 
-            model = payload.get("model", "")
-            request_url = (
-                f"{url}/openai/deployments/{model}/responses?api-version={api_version}"
-            )
+                model = payload.get("model", "")
+                request_url = (
+                    f"{url}/openai/deployments/{model}/responses?api-version={api_version}"
+                )
         else:
             request_url = f"{url}/responses"
 
@@ -1404,8 +1470,7 @@ async def proxy(path: str, request: Request, user=Depends(get_verified_user)):
             api_version = api_config.get("api_version", "2023-03-15-preview")
 
             # Only set api-key header if not using Azure Entra ID authentication
-            auth_type = api_config.get("auth_type", "bearer")
-            if auth_type not in ("azure_ad", "microsoft_entra_id"):
+            if azure_uses_api_key_header(api_config):
                 headers["api-key"] = key
 
             headers["api-version"] = api_version
