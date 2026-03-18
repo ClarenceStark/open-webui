@@ -63,6 +63,8 @@ payload = {
             "azure": True,
             "api_version": os.environ["API1_VERSION"],
             "auth_type": "bearer",
+            "api_type": "responses_v1",
+            "api_key_header": "authorization",
             "model_ids": [os.environ["API1_MODEL"]],
             "connection_type": "external",
         },
