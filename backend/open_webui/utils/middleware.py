@@ -3623,6 +3623,9 @@ async def streaming_chat_response_handler(response, ctx):
                         ),
                     )
                     last_delta_data = None
+                    responses_emit_interval = 1 / 60
+                    last_responses_emit_at = 0.0
+                    pending_responses_data = None
 
                     async def flush_pending_delta_data(threshold: int = 0):
                         nonlocal delta_count
@@ -3637,6 +3640,26 @@ async def streaming_chat_response_handler(response, ctx):
                             )
                             delta_count = 0
                             last_delta_data = None
+
+                    async def flush_pending_responses_data(force: bool = False):
+                        nonlocal last_responses_emit_at
+                        nonlocal pending_responses_data
+
+                        if not pending_responses_data:
+                            return
+
+                        now = time.monotonic()
+                        if force or (
+                            now - last_responses_emit_at >= responses_emit_interval
+                        ):
+                            await event_emitter(
+                                {
+                                    "type": "chat:completion",
+                                    "data": pending_responses_data,
+                                }
+                            )
+                            last_responses_emit_at = now
+                            pending_responses_data = None
 
                     async for line in response.body_iterator:
                         line = (
@@ -3707,12 +3730,15 @@ async def streaming_chat_response_handler(response, ctx):
                                     if response_metadata:
                                         processed_data.update(response_metadata)
 
-                                    await event_emitter(
-                                        {
-                                            "type": "chat:completion",
-                                            "data": processed_data,
-                                        }
-                                    )
+                                    if response_metadata and (
+                                        response_metadata.get("done")
+                                        or response_metadata.get("error")
+                                    ):
+                                        pending_responses_data = processed_data
+                                        await flush_pending_responses_data(force=True)
+                                    else:
+                                        pending_responses_data = processed_data
+                                        await flush_pending_responses_data()
                                     continue
                                 else:
                                     choices = data.get("choices", [])
@@ -3845,6 +3871,9 @@ async def streaming_chat_response_handler(response, ctx):
                                         if response_tool_calls:
                                             # Flush any pending text first
                                             await flush_pending_delta_data()
+                                            await flush_pending_responses_data(
+                                                force=True
+                                            )
 
                                             # Build pending function_call output items for display
                                             pending_fc_items = []
@@ -4160,6 +4189,7 @@ async def streaming_chat_response_handler(response, ctx):
                                 log.debug(f"Error: {e}")
                                 continue
                     await flush_pending_delta_data()
+                    await flush_pending_responses_data(force=True)
 
                     if output:
                         # Clean up the last message item

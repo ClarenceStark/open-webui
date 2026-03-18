@@ -163,6 +163,8 @@
 	};
 
 	let taskIds = null;
+	let pendingStreamMessagePatches = new Map();
+	let pendingStreamMessageFrames = new Map();
 
 	// Chat Input
 	let prompt = '';
@@ -415,6 +417,84 @@
 			showFileNavDir.set(data.path);
 		} else if (type === 'terminal:run_command') {
 			showFileNavDir.set('/');
+		}
+	};
+
+	const applyStreamingMessageEffects = (message) => {
+		if (navigator.vibrate && ($settings?.hapticFeedback ?? false)) {
+			navigator.vibrate(5);
+		}
+
+		if ($showCallOverlay) {
+			const messageContentParts = getMessageContentParts(
+				removeAllDetails(message.content),
+				$config?.audio?.tts?.split_on ?? 'punctuation'
+			);
+			messageContentParts.pop();
+
+			if (
+				messageContentParts.length > 0 &&
+				messageContentParts[messageContentParts.length - 1] !== message.lastSentence
+			) {
+				message.lastSentence = messageContentParts[messageContentParts.length - 1];
+				eventTarget.dispatchEvent(
+					new CustomEvent('chat', {
+						detail: {
+							id: message.id,
+							content: messageContentParts[messageContentParts.length - 1]
+						}
+					})
+				);
+			}
+		}
+	};
+
+	const flushPendingStreamMessagePatch = (messageId) => {
+		const patch = pendingStreamMessagePatches.get(messageId);
+		if (!patch) return;
+
+		pendingStreamMessagePatches.delete(messageId);
+
+		const frame = pendingStreamMessageFrames.get(messageId);
+		if (frame) {
+			cancelAnimationFrame(frame);
+			pendingStreamMessageFrames.delete(messageId);
+		}
+
+		const message = history.messages[messageId];
+		if (!message) return;
+
+		if (patch.output !== undefined) {
+			message.output = patch.output;
+		}
+
+		if (patch.content !== undefined) {
+			message.content = patch.content;
+			applyStreamingMessageEffects(message);
+		}
+
+		if (patch.usage !== undefined) {
+			message.usage = patch.usage;
+		}
+
+		history.messages[messageId] = message;
+	};
+
+	const scheduleStreamMessagePatch = (messageId, patch, force = false) => {
+		const pending = pendingStreamMessagePatches.get(messageId) ?? {};
+		pendingStreamMessagePatches.set(messageId, { ...pending, ...patch });
+
+		if (force) {
+			flushPendingStreamMessagePatch(messageId);
+			return;
+		}
+
+		if (!pendingStreamMessageFrames.has(messageId)) {
+			const frame = requestAnimationFrame(() => {
+				pendingStreamMessageFrames.delete(messageId);
+				flushPendingStreamMessagePatch(messageId);
+			});
+			pendingStreamMessageFrames.set(messageId, frame);
 		}
 	};
 
@@ -1550,7 +1630,7 @@
 
 		// Store raw OR-aligned output items from backend
 		if (output) {
-			message.output = output;
+			scheduleStreamMessagePatch(message.id, { output }, done);
 		}
 
 		if (error) {
@@ -1572,71 +1652,14 @@
 					console.log('Empty response');
 				} else {
 					message.content += value;
-
-					if (navigator.vibrate && ($settings?.hapticFeedback ?? false)) {
-						navigator.vibrate(5);
-					}
-
-					// Emit chat event for TTS (only when call overlay is active)
-					if ($showCallOverlay) {
-						const messageContentParts = getMessageContentParts(
-							removeAllDetails(message.content),
-							$config?.audio?.tts?.split_on ?? 'punctuation'
-						);
-						messageContentParts.pop();
-
-						// dispatch only last sentence and make sure it hasn't been dispatched before
-						if (
-							messageContentParts.length > 0 &&
-							messageContentParts[messageContentParts.length - 1] !== message.lastSentence
-						) {
-							message.lastSentence = messageContentParts[messageContentParts.length - 1];
-							eventTarget.dispatchEvent(
-								new CustomEvent('chat', {
-									detail: {
-										id: message.id,
-										content: messageContentParts[messageContentParts.length - 1]
-									}
-								})
-							);
-						}
-					}
+					applyStreamingMessageEffects(message);
 				}
 			}
 		}
 
 		if (content) {
 			// REALTIME_CHAT_SAVE is disabled
-			message.content = content;
-
-			if (navigator.vibrate && ($settings?.hapticFeedback ?? false)) {
-				navigator.vibrate(5);
-			}
-
-			// Emit chat event for TTS (only when call overlay is active)
-			if ($showCallOverlay) {
-				const messageContentParts = getMessageContentParts(
-					removeAllDetails(message.content),
-					$config?.audio?.tts?.split_on ?? 'punctuation'
-				);
-				messageContentParts.pop();
-
-				// dispatch only last sentence and make sure it hasn't been dispatched before
-				if (
-					messageContentParts.length > 0 &&
-					messageContentParts[messageContentParts.length - 1] !== message.lastSentence
-				) {
-					message.lastSentence = messageContentParts[messageContentParts.length - 1];
-					eventTarget.dispatchEvent(
-						new CustomEvent('chat', {
-							detail: {
-								id: message.id,
-								content: messageContentParts[messageContentParts.length - 1]
-							}
-						})
-					);
-				}
-			}
+			scheduleStreamMessagePatch(message.id, { content }, done);
 		}
 
 		if (selected_model_id) {
@@ -1645,12 +1668,16 @@
 		}
 
 		if (usage) {
-			message.usage = usage;
+			scheduleStreamMessagePatch(message.id, { usage }, done);
 		}
 
-		history.messages[message.id] = message;
+		if (!content && !output && !usage) {
+			history.messages[message.id] = message;
+		}
 
 		if (done) {
+			flushPendingStreamMessagePatch(message.id);
+			message = history.messages[message.id] ?? message;
 			message.done = true;
 
 			if ($settings.responseAutoCopy) {
@@ -2632,6 +2659,14 @@
 			toast.error($i18n.t('Failed to archive chat.'));
 		}
 	};
+
+	onDestroy(() => {
+		for (const frame of pendingStreamMessageFrames.values()) {
+			cancelAnimationFrame(frame);
+		}
+		pendingStreamMessageFrames.clear();
+		pendingStreamMessagePatches.clear();
+	});
 </script>
 
 <svelte:head>
