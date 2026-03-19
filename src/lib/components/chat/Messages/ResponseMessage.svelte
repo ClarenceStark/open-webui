@@ -36,12 +36,9 @@
 		removeDetails,
 		removeAllDetails
 	} from '$lib/utils';
-	import { getModelAvatarSrc, getModelDisplayName } from '$lib/utils/model-display';
 	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
 
-	import Name from './Name.svelte';
-	import ProfileImage from './ProfileImage.svelte';
-	import Skeleton from './Skeleton.svelte';
+	import ThinkingIndicator from './ThinkingIndicator.svelte';
 	import Image from '$lib/components/common/Image.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import RateComment from './RateComment.svelte';
@@ -820,24 +817,11 @@
 		dir={$settings.chatDirection}
 		style="scroll-margin-top: 3rem;"
 	>
-		<div class={`shrink-0 ltr:mr-3 rtl:ml-3 hidden @lg:flex mt-1 `}>
-			<ProfileImage
-				src={getModelAvatarSrc(model, $i18n.language)}
-				className={'size-8 assistant-message-profile-image'}
-			/>
-		</div>
-
 		<div class="flex-auto w-0 pl-1 relative">
-			<Name>
-				<Tooltip content={getModelDisplayName(model?.name, message.model)} placement="top-start">
-					<span id="response-message-model-name" class="line-clamp-1 text-black dark:text-white">
-						{getModelDisplayName(model?.name, message.model)}
-					</span>
-				</Tooltip>
-
-				{#if message.timestamp}
+			{#if message.timestamp}
+				<div class="flex mb-0.5 text-xs">
 					<div
-						class="self-center text-xs font-medium first-letter:capitalize ml-0.5 translate-y-[1px] {($settings?.highContrastMode ??
+						class="font-medium first-letter:capitalize translate-y-[1px] {($settings?.highContrastMode ??
 						false)
 							? 'dark:text-gray-100 text-gray-900'
 							: 'invisible group-hover:visible transition text-gray-400'}"
@@ -851,8 +835,8 @@
 							>
 						</Tooltip>
 					</div>
-				{/if}
-			</Name>
+				</div>
+			{/if}
 
 			<div>
 				<div class="chat-{message.role} w-full min-w-full markdown-prose">
@@ -978,7 +962,7 @@
 							id="response-content-container"
 						>
 							{#if message.content === '' && !message.error && ((model?.info?.meta?.capabilities?.status_updates ?? true) ? (message?.statusHistory ?? [...(message?.status ? [message?.status] : [])]).length === 0 || (message?.statusHistory?.at(-1)?.hidden ?? false) : true)}
-								<Skeleton />
+								<ThinkingIndicator startedAt={message.timestamp ?? null} />
 							{:else if message.content && message.error !== true}
 								<!-- always show message contents even if there's an error -->
 								<!-- unless message.error === true which is legacy error handling, where the error message is stored in message.content -->

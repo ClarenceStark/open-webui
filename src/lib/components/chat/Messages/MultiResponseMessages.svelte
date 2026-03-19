@@ -15,7 +15,7 @@
 
 	import Markdown from './Markdown.svelte';
 	import Name from './Name.svelte';
-	import Skeleton from './Skeleton.svelte';
+	import ThinkingIndicator from './ThinkingIndicator.svelte';
 	import localizedFormat from 'dayjs/plugin/localizedFormat';
 	import ProfileImage from './ProfileImage.svelte';
 	import { WEBUI_BASE_URL } from '$lib/constants';
@@ -414,7 +414,7 @@
 
 								<div class="mt-1 markdown-prose w-full min-w-full">
 									{#if (message?.content ?? '') === ''}
-										<Skeleton />
+										<ThinkingIndicator startedAt={message?.timestamp ?? null} />
 									{:else}
 										<Markdown id={`merged`} content={message.content ?? ''} />
 									{/if}

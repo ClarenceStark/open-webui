@@ -933,6 +933,22 @@ def handle_responses_streaming_event(
         return current_output, None
 
 
+def response_item_has_visible_content(item: dict) -> bool:
+    item_type = item.get("type")
+
+    if item_type == "message":
+        for content_part in item.get("content", []) or []:
+            if content_part.get("text"):
+                return True
+        return False
+
+    return item_type in {
+        "function_call",
+        "function_call_output",
+        "open_webui:code_interpreter",
+    }
+
+
 def get_source_context(
     sources: list, source_ids: dict = None, include_content: bool = True
 ) -> str:
@@ -3656,7 +3672,10 @@ async def streaming_chat_response_handler(response, ctx):
                     nonlocal output
 
                     response_started_at = time.time()
+                    response_output_start_index = len(output)
                     response_tool_calls = []
+                    response_has_reasoning = False
+                    first_visible_response_output_at = None
 
                     delta_count = 0
                     delta_chunk_size = max(
@@ -3758,6 +3777,33 @@ async def streaming_chat_response_handler(response, ctx):
                                     )
                                 # Check for Responses API events (type field starts with "response.")
                                 elif data.get("type", "").startswith("response."):
+                                    event_type = data.get("type", "")
+                                    event_item = data.get("item", {})
+
+                                    if (
+                                        event_type.startswith("response.reasoning")
+                                        or event_type
+                                        == "response.reasoning_summary_part.added"
+                                        or event_item.get("type") == "reasoning"
+                                    ):
+                                        response_has_reasoning = True
+
+                                    if (
+                                        first_visible_response_output_at is None
+                                        and event_type == "response.output_text.delta"
+                                    ):
+                                        first_visible_response_output_at = time.time()
+                                    elif (
+                                        first_visible_response_output_at is None
+                                        and event_type
+                                        in {
+                                            "response.output_item.added",
+                                            "response.output_item.done",
+                                        }
+                                        and response_item_has_visible_content(event_item)
+                                    ):
+                                        first_visible_response_output_at = time.time()
+
                                     output, response_metadata = (
                                         handle_responses_streaming_event(
                                             data,
@@ -4271,6 +4317,36 @@ async def streaming_chat_response_handler(response, ctx):
                                     - reasoning_item["started_at"]
                                 )
                                 reasoning_item["status"] = "completed"
+
+                    response_segment = output[response_output_start_index:]
+                    has_reasoning_in_segment = any(
+                        item.get("type") == "reasoning" for item in response_segment
+                    )
+                    has_visible_output_in_segment = any(
+                        response_item_has_visible_content(item)
+                        for item in response_segment
+                    )
+
+                    if (
+                        has_visible_output_in_segment
+                        and not response_has_reasoning
+                        and not has_reasoning_in_segment
+                    ):
+                        ended_at = first_visible_response_output_at or time.time()
+                        started_at = response_started_at
+                        output.insert(
+                            response_output_start_index,
+                            {
+                                "type": "reasoning",
+                                "id": output_id("r"),
+                                "status": "completed",
+                                "started_at": started_at,
+                                "ended_at": ended_at,
+                                "duration": max(0, int(ended_at - started_at)),
+                                "summary": [],
+                                "content": [],
+                            },
+                        )
 
                     if response_tool_calls:
                         tool_calls.append(_split_tool_calls(response_tool_calls))

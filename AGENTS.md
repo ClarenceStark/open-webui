@@ -76,3 +76,5 @@ git push origin codex/custom-main
 ## Deployment Note
 
 - The actively deployed custom instance should run from `codex/custom-main`, not from `main`
+- After any frontend code change, always run a fresh frontend production build before handing off the task
+- Treat frontend work as incomplete until the updated `build/` output has been regenerated
