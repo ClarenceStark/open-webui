@@ -119,20 +119,18 @@
 	export let messageId;
 	export let selectedModels = [];
 
-	let message: MessageType = structuredClone(history.messages[messageId]);
-	$: if (history.messages) {
-		const source = history.messages[messageId];
-		if (source) {
-			// Fast path: O(1) check on the fields that change most often (content during streaming, done at end)
-			// Avoids 2x O(n) JSON.stringify calls that are always true during streaming anyway
-			if (message.content !== source.content || message.done !== source.done) {
-				message = structuredClone(source);
-			} else if (JSON.stringify(message) !== JSON.stringify(source)) {
-				// Slow path: full comparison for infrequent changes (sources, annotations, status, etc.)
-				message = structuredClone(source);
-			}
-		}
-	}
+	let latestSourceMessage: MessageType = structuredClone(history.messages[messageId]);
+	let message: MessageType = structuredClone(latestSourceMessage);
+	let targetContent = latestSourceMessage.content ?? '';
+	let targetContentUnits = Array.from(targetContent);
+	let visibleContent = targetContent;
+	let visibleUnitsCount = targetContentUnits.length;
+	let targetDone = latestSourceMessage.done ?? false;
+	let visibleDone = targetDone;
+	let playbackFrame: number | null = null;
+	let lastPlaybackAt = 0;
+	let playbackCarry = 0;
+	let playbackBufferStartedAt = 0;
 
 	export let siblings;
 
@@ -180,6 +178,203 @@
 	let loadingSpeech = false;
 
 	let showRateComment = false;
+
+	const isSmoothStreamingEnabled = () => $settings?.chatFadeStreamingText ?? true;
+
+	const stopContentPlayback = () => {
+		if (playbackFrame !== null) {
+			cancelAnimationFrame(playbackFrame);
+			playbackFrame = null;
+		}
+		lastPlaybackAt = 0;
+		playbackCarry = 0;
+		playbackBufferStartedAt = 0;
+	};
+
+	const syncVisibleContent = () => {
+		visibleContent =
+			visibleUnitsCount >= targetContentUnits.length
+				? targetContent
+				: targetContentUnits.slice(0, visibleUnitsCount).join('');
+	};
+
+	const syncDisplayedMessage = () => {
+		const nextMessage: MessageType = structuredClone(latestSourceMessage);
+		nextMessage.content = isSmoothStreamingEnabled() ? visibleContent : targetContent;
+		nextMessage.done = isSmoothStreamingEnabled() ? visibleDone : targetDone;
+		message = nextMessage;
+	};
+
+	const getPlaybackCharsPerSecond = (queuedChars: number, done: boolean) => {
+		const baseRate = 54;
+		const targetBacklog = done ? 0 : 18;
+		const backlogDelta = queuedChars - targetBacklog;
+		const catchUpRate =
+			backlogDelta > 0
+				? Math.min(done ? 140 : 68, backlogDelta * 3.6)
+				: Math.max(-24, backlogDelta * 1.25);
+		const doneBoost = done ? 20 : 0;
+		return Math.max(26, baseRate + catchUpRate + doneBoost);
+	};
+
+	const shouldHoldForBuffer = (queuedChars: number, timestamp: number) => {
+		if (targetDone || visibleUnitsCount > 0 || queuedChars <= 0) {
+			playbackBufferStartedAt = 0;
+			return false;
+		}
+
+		const minBufferChars = 14;
+		const maxBufferWaitMs = 90;
+		if (queuedChars >= minBufferChars) {
+			playbackBufferStartedAt = 0;
+			return false;
+		}
+
+		if (playbackBufferStartedAt === 0) {
+			playbackBufferStartedAt = timestamp;
+		}
+
+		return timestamp - playbackBufferStartedAt < maxBufferWaitMs;
+	};
+
+	const scheduleContentPlayback = () => {
+		if (playbackFrame === null) {
+			playbackFrame = requestAnimationFrame(stepContentPlayback);
+		}
+	};
+
+	const stepContentPlayback = (timestamp: number) => {
+		playbackFrame = null;
+
+		if (!isSmoothStreamingEnabled()) {
+			visibleUnitsCount = targetContentUnits.length;
+			visibleContent = targetContent;
+			visibleDone = targetDone;
+			syncDisplayedMessage();
+			stopContentPlayback();
+			return;
+		}
+
+		if (lastPlaybackAt === 0) {
+			lastPlaybackAt = timestamp - 32;
+		}
+
+		const queuedChars = targetContentUnits.length - visibleUnitsCount;
+		if (queuedChars <= 0) {
+			playbackCarry = 0;
+			lastPlaybackAt = 0;
+			if (targetDone && !visibleDone) {
+				visibleDone = true;
+				syncDisplayedMessage();
+			}
+			return;
+		}
+
+		if (shouldHoldForBuffer(queuedChars, timestamp)) {
+			scheduleContentPlayback();
+			return;
+		}
+
+		const elapsedMs = timestamp - lastPlaybackAt;
+		if (elapsedMs < 28) {
+			scheduleContentPlayback();
+			return;
+		}
+
+		const deltaMs = Math.min(64, elapsedMs);
+		lastPlaybackAt = timestamp;
+
+		const charsPerSecond = getPlaybackCharsPerSecond(queuedChars, targetDone);
+		const totalCharsToReveal = (deltaMs / 1000) * charsPerSecond + playbackCarry;
+		let step = Math.floor(totalCharsToReveal);
+		playbackCarry = totalCharsToReveal - step;
+
+		if (step <= 0 && deltaMs >= 28) {
+			step = 1;
+			playbackCarry = 0;
+		}
+
+		if (step > 0) {
+			visibleUnitsCount = Math.min(targetContentUnits.length, visibleUnitsCount + step);
+			syncVisibleContent();
+			if (visibleUnitsCount >= targetContentUnits.length && targetDone) {
+				visibleDone = true;
+			}
+			syncDisplayedMessage();
+		}
+
+		if (visibleUnitsCount < targetContentUnits.length || (targetDone && !visibleDone)) {
+			scheduleContentPlayback();
+		}
+	};
+
+	const applySourceMessage = (source: MessageType) => {
+		latestSourceMessage = structuredClone(source);
+
+		const nextTargetContent = source.content ?? '';
+		const nextTargetDone = source.done ?? false;
+		const smoothStreamingEnabled = isSmoothStreamingEnabled();
+
+		if (nextTargetContent !== targetContent) {
+			targetContent = nextTargetContent;
+			targetContentUnits = Array.from(targetContent);
+
+			if (!smoothStreamingEnabled) {
+				visibleUnitsCount = targetContentUnits.length;
+				visibleContent = targetContent;
+			} else if (
+				visibleUnitsCount > targetContentUnits.length ||
+				!targetContent.startsWith(visibleContent)
+			) {
+				visibleUnitsCount = targetContentUnits.length;
+				visibleContent = targetContent;
+				playbackCarry = 0;
+				lastPlaybackAt = 0;
+				playbackBufferStartedAt = 0;
+			}
+		}
+
+		targetDone = nextTargetDone;
+
+		if (!smoothStreamingEnabled) {
+			visibleDone = targetDone;
+			stopContentPlayback();
+		} else {
+			if (!targetDone) {
+				visibleDone = false;
+			}
+
+			if (visibleUnitsCount < targetContentUnits.length) {
+				scheduleContentPlayback();
+			} else if (targetDone) {
+				visibleDone = true;
+			}
+		}
+
+		syncDisplayedMessage();
+	};
+
+	$: if (history.messages) {
+		const source = history.messages[messageId];
+		if (source) {
+			applySourceMessage(source);
+		}
+	}
+
+	$: if (latestSourceMessage) {
+		if (isSmoothStreamingEnabled()) {
+			if (visibleUnitsCount < targetContentUnits.length || (targetDone && !visibleDone)) {
+				scheduleContentPlayback();
+			}
+		} else {
+			visibleUnitsCount = targetContentUnits.length;
+			visibleContent = targetContent;
+			visibleDone = targetDone;
+			stopContentPlayback();
+		}
+
+		syncDisplayedMessage();
+	}
 
 	const copyToClipboard = async (text) => {
 		text = removeAllDetails(text);
@@ -604,6 +799,8 @@
 		if (contentContainerElement) {
 			contentContainerElement.removeEventListener('copy', contentCopyHandler);
 		}
+
+		stopContentPlayback();
 	});
 </script>
 
