@@ -1094,10 +1094,10 @@
 />
 
 {#if loaded}
-	<div class="w-full font-primary chat-shell-composer-wrap">
+	<div class="font-primary chat-shell-composer-wrap">
 		<div class=" mx-auto inset-x-0 bg-transparent flex justify-center">
 			<div
-				class="flex flex-col px-3 {($settings?.widescreenMode ?? null)
+				class="chat-shell-input-frame flex flex-col px-3 {($settings?.widescreenMode ?? null)
 					? 'max-w-full'
 					: 'max-w-6xl'} w-full"
 			>
@@ -1135,7 +1135,7 @@
 
 		<div class="bg-transparent">
 			<div
-				class="{($settings?.widescreenMode ?? null)
+				class="chat-shell-input-frame {($settings?.widescreenMode ?? null)
 					? 'max-w-full'
 					: 'max-w-6xl'} px-2.5 mx-auto inset-x-0"
 			>

@@ -2822,7 +2822,7 @@
 								</div>
 							</div>
 
-							<div class="pb-2 z-10 chat-shell-input-stage">
+							<div class="pb-2 z-10 chat-shell-input-stage text-base font-normal w-full">
 								<MessageInput
 									bind:this={messageInput}
 									{history}

@@ -300,8 +300,37 @@ body.chat-shell-active {
 	color: var(--chat-shell-text);
 }
 
+.chat-shell {
+	--chat-shell-input-max-width: 56rem;
+	--chat-shell-assistant-gap: 4ch;
+}
+
+.chat-shell-input-stage,
 .chat-shell-composer-wrap {
 	position: relative;
+	width: min(100%, var(--chat-shell-input-max-width));
+	margin-inline: auto;
+}
+
+.chat-shell-input-frame {
+	width: 100%;
+	max-width: 100%;
+}
+
+.chat-shell-message-frame {
+	width: 100%;
+	margin-inline: auto;
+}
+
+.chat-shell-message-frame-user {
+	max-width: min(100%, var(--chat-shell-input-max-width));
+}
+
+.chat-shell-message-frame-assistant {
+	max-width: min(
+		calc(var(--chat-shell-input-max-width) - var(--chat-shell-assistant-gap)),
+		calc(100% - 1rem)
+	);
 }
 
 .chat-shell-form {
@@ -417,6 +446,12 @@ body.chat-shell-active {
 .chat-shell-send-button-secondary {
 	background: rgba(255, 255, 255, 0.08);
 	color: var(--chat-shell-text);
+}
+
+@media (min-width: 1536px) {
+	.chat-shell {
+		--chat-shell-input-max-width: 60rem;
+	}
 }
 
 .chat-shell-send-button-secondary:hover {

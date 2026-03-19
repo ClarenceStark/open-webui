@@ -47,9 +47,10 @@
 
 <div
 	role="listitem"
-	class="flex flex-col justify-between px-5 mb-3 w-full {($settings?.widescreenMode ?? null)
-		? 'max-w-full'
-		: 'max-w-5xl'} mx-auto rounded-lg group"
+	class="chat-shell-message-frame flex flex-col justify-between px-3 mb-3 w-full rounded-lg group {history.messages[messageId]?.role ===
+	'user'
+		? 'chat-shell-message-frame-user'
+		: 'chat-shell-message-frame-assistant'}"
 >
 	{#if history.messages[messageId]}
 		{#if history.messages[messageId].role === 'user'}
