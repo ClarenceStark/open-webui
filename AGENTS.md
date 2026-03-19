@@ -78,3 +78,59 @@ git push origin codex/custom-main
 - The actively deployed custom instance should run from `codex/custom-main`, not from `main`
 - After any frontend code change, always run a fresh frontend production build before handing off the task
 - Treat frontend work as incomplete until the updated `build/` output has been regenerated
+
+## Local Startup Playbook (macOS)
+
+To avoid repeated startup failures and environment mismatch issues, always use the project virtualenv Python for backend startup.
+
+- Do not rely on system `python3`/`python` for this project startup.
+- `backend/start.sh` may use Homebrew Python (for example 3.14) where `uvicorn` is not installed.
+- Preferred startup command is explicit `.venv` Python + `uvicorn`.
+
+### 1) Start Backend (local-only access)
+
+```bash
+cd ~/code/open-webui/backend
+/Users/clarencestark/code/open-webui/.venv/bin/python -m uvicorn open_webui.main:app \
+  --host 127.0.0.1 \
+  --port 8080 \
+  --forwarded-allow-ips '*' \
+  --workers 1
+```
+
+### 2) Start Backend (same-WiFi/LAN access for phone)
+
+```bash
+cd ~/code/open-webui/backend
+/Users/clarencestark/code/open-webui/.venv/bin/python -m uvicorn open_webui.main:app \
+  --host 0.0.0.0 \
+  --port 8080 \
+  --forwarded-allow-ips '*' \
+  --workers 1
+```
+
+Then open on phone:
+
+```bash
+IP=$(ipconfig getifaddr en0 || ipconfig getifaddr en1)
+echo "http://$IP:8080"
+```
+
+### 3) Must-run verification after startup
+
+```bash
+lsof -nP -iTCP:8080 -sTCP:LISTEN
+curl -sS http://127.0.0.1:8080/health
+curl -sS "http://$(ipconfig getifaddr en0 || ipconfig getifaddr en1):8080/health"
+```
+
+Expected health response:
+
+```json
+{"status":true}
+```
+
+### 4) Fast failure diagnosis
+
+- If you see `No module named uvicorn`, you are not using the project `.venv` Python.
+- If startup command exits immediately and port `8080` is not listening, run in foreground first and read logs before daemonizing.

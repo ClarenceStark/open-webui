@@ -1,12 +1,17 @@
 <script lang="ts">
+	import { getContext } from 'svelte';
 	import { onDestroy, onMount } from 'svelte';
 
-	export let text = '正在思考';
+	const i18n = getContext('i18n');
+
+	export let text: string | null = null;
 	export let startedAt: number | null = null;
 
 	let elapsedSeconds = 0;
 	let currentStartedAt = Math.floor(Date.now() / 1000);
 	let timer: ReturnType<typeof setInterval> | null = null;
+	let resolvedText = '正在思考';
+	let resolvedAriaLabel = 'AI 正在思考';
 
 	const nowInSeconds = () => Math.floor(Date.now() / 1000);
 
@@ -46,6 +51,16 @@
 	};
 
 	$: {
+		if (text && text.trim().length > 0) {
+			resolvedText = text;
+		} else {
+			const lang = ($i18n?.language ?? '').toLowerCase();
+			resolvedText = lang.startsWith('en') ? 'Thinking' : '正在思考';
+		}
+		resolvedAriaLabel = `AI ${resolvedText}`;
+	}
+
+	$: {
 		const nextStartedAt = normalizeStartedAt(startedAt);
 		if (nextStartedAt !== currentStartedAt) {
 			currentStartedAt = nextStartedAt;
@@ -64,8 +79,8 @@
 	});
 </script>
 
-<div class="thinking-indicator" aria-live="polite" aria-label="AI 正在思考">
-	<span class="thinking-indicator__text" data-text={text} aria-hidden="true">{text}</span>
+<div class="thinking-indicator" aria-live="polite" aria-label={resolvedAriaLabel}>
+	<span class="thinking-indicator__text" data-text={resolvedText} aria-hidden="true">{resolvedText}</span>
 	<span class="thinking-indicator__divider" aria-hidden="true"></span>
 	<span class="thinking-indicator__timer">{formatElapsed(elapsedSeconds)}</span>
 </div>
