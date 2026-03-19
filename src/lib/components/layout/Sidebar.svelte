@@ -72,6 +72,7 @@
 	let scrollTop = 0;
 
 	let navElement;
+	export let chatShell = false;
 	let shiftKey = false;
 
 	let selectedChatId = null;
@@ -875,7 +876,7 @@
 	<div
 		bind:this={navElement}
 		id="sidebar"
-		class="h-screen max-h-[100dvh] min-h-screen select-none {$showSidebar
+		class="h-screen max-h-[100dvh] min-h-screen select-none {chatShell ? 'chat-shell-sidebar' : ''} {$showSidebar
 			? `${$mobile ? 'bg-gray-50 dark:bg-gray-950' : 'bg-gray-50/70 dark:bg-gray-950/70'} z-50`
 			: ' bg-transparent z-0 '} {$isApp
 			? `ml-[4.5rem] md:ml-0 `
@@ -909,9 +910,9 @@
 				<a href="/" class="flex flex-1 px-1.5" on:click={newChatHandler}>
 					<div
 						id="sidebar-webui-name"
-						class=" self-center font-medium text-gray-850 dark:text-white font-primary"
+						class="self-center font-medium text-gray-850 dark:text-white font-primary"
 					>
-						ChatGPT
+						{$WEBUI_NAME}
 					</div>
 				</a>
 				<Tooltip

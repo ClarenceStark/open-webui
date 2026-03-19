@@ -706,9 +706,23 @@
 		} catch {}
 	};
 
+	let restoreChatShellTheme = () => {};
+
 	onMount(() => {
 		loading = true;
 		console.log('mounted');
+		const html = document.documentElement;
+		const body = document.body;
+		const hadDarkClass = html.classList.contains('dark');
+		html.classList.add('dark');
+		body.classList.add('chat-shell-active');
+		restoreChatShellTheme = () => {
+			body.classList.remove('chat-shell-active');
+			if (!hadDarkClass) {
+				html.classList.remove('dark');
+			}
+		};
+
 		window.addEventListener('message', onMessageHandler);
 		$socket?.on('events', chatEventHandler);
 
@@ -2661,6 +2675,7 @@
 	};
 
 	onDestroy(() => {
+		restoreChatShellTheme();
 		for (const frame of pendingStreamMessageFrames.values()) {
 			cancelAnimationFrame(frame);
 		}
@@ -2702,7 +2717,7 @@
 <div
 	class="h-screen max-h-[100dvh] transition-width duration-200 ease-in-out {$showSidebar
 		? '  md:max-w-[calc(100%-var(--sidebar-width))]'
-		: ' '} w-full max-w-full flex flex-col"
+		: ' '} w-full max-w-full flex flex-col chat-shell"
 	id="chat-container"
 >
 	{#if !loading}
@@ -2711,21 +2726,21 @@
 				<div
 					class="absolute top-0 left-0 w-full h-full bg-cover bg-center bg-no-repeat"
 					style="background-image: url({$selectedFolder?.meta?.background_image_url})  "
-				/>
+				></div>
 
 				<div
-					class="absolute top-0 left-0 w-full h-full bg-linear-to-t from-white to-white/85 dark:from-gray-900 dark:to-gray-900/90 z-0"
-				/>
+					class="absolute top-0 left-0 w-full h-full bg-linear-to-t from-[#262625] to-[#262625]/86 dark:from-[#262625] dark:to-[#262625]/92 z-0"
+				></div>
 			{:else if $settings?.backgroundImageUrl ?? $config?.license_metadata?.background_image_url ?? null}
 				<div
 					class="absolute top-0 left-0 w-full h-full bg-cover bg-center bg-no-repeat"
 					style="background-image: url({$settings?.backgroundImageUrl ??
 						$config?.license_metadata?.background_image_url})  "
-				/>
+				></div>
 
 				<div
-					class="absolute top-0 left-0 w-full h-full bg-linear-to-t from-white to-white/85 dark:from-gray-900 dark:to-gray-900/90 z-0"
-				/>
+					class="absolute top-0 left-0 w-full h-full bg-linear-to-t from-[#262625] to-[#262625]/86 dark:from-[#262625] dark:to-[#262625]/92 z-0"
+				></div>
 			{/if}
 
 			<PaneGroup direction="horizontal" class="w-full h-full">
@@ -2828,7 +2843,7 @@
 								</div>
 							</div>
 
-							<div class=" pb-2 z-10">
+							<div class="pb-2 z-10 chat-shell-input-stage">
 								<MessageInput
 									bind:this={messageInput}
 									{history}

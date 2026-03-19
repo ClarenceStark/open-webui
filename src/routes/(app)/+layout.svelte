@@ -49,6 +49,7 @@
 	import { Shortcut, shortcuts } from '$lib/shortcuts';
 
 	const i18n = getContext('i18n');
+	$: isChatShellRoute = $page.url.pathname === '/' || $page.url.pathname.startsWith('/c/');
 
 	let loaded = false;
 	let DB = null;
@@ -443,7 +444,7 @@
 					</div>
 				{/if}
 
-				<Sidebar />
+				<Sidebar chatShell={isChatShellRoute} />
 
 				{#if loaded}
 					<slot />

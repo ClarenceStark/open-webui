@@ -122,7 +122,18 @@
 	export let selectedModels: [''];
 
 	let selectedModelIds = [];
+	let activeModel = null;
+	let activeModelLabel = 'Select model';
 	$: selectedModelIds = atSelectedModel !== undefined ? [atSelectedModel.id] : selectedModels;
+	$: activeModel =
+		selectedModelIds.length === 1
+			? $models.find((model) => model.id === selectedModelIds[0])
+			: null;
+	$: activeModelLabel = activeModel?.name
+		? getModelDisplayName(activeModel.name, activeModel.id)
+		: selectedModelIds.length > 1
+			? `${selectedModelIds.length} models`
+			: 'Select model';
 
 	export let history;
 	export let taskIds = null;
@@ -143,6 +154,7 @@
 	export let onQueueSendNow: (id: string) => void = () => {};
 	export let onQueueEdit: (id: string) => void = () => {};
 	export let onQueueDelete: (id: string) => void = () => {};
+	export let hero = false;
 
 	let inputContent = null;
 
@@ -1082,7 +1094,7 @@
 />
 
 {#if loaded}
-	<div class="w-full font-primary">
+	<div class="w-full font-primary chat-shell-composer-wrap">
 		<div class=" mx-auto inset-x-0 bg-transparent flex justify-center">
 			<div
 				class="flex flex-col px-3 {($settings?.widescreenMode ?? null)
@@ -1096,6 +1108,7 @@
 						>
 							<button
 								class=" bg-white border border-gray-100 dark:border-none dark:bg-white/20 p-1.5 rounded-full pointer-events-auto"
+								aria-label={$i18n.t('Scroll to bottom')}
 								on:click={() => {
 									autoScroll = true;
 									scrollToBottom();
@@ -1171,7 +1184,7 @@
 						/>
 					</div>
 					<form
-						class="w-full flex flex-col gap-1.5 {recording ? 'hidden' : ''}"
+						class="chat-shell-form w-full flex flex-col gap-1.5 {recording ? 'hidden' : ''}"
 						on:submit|preventDefault={() => {
 							// check if selectedModels support image input
 							dispatch('submit', prompt);
@@ -1180,13 +1193,14 @@
 						<button
 							id="generate-message-pair-button"
 							class="hidden"
+							aria-label={$i18n.t('Generate message pair')}
 							on:click={() => createMessagePair(prompt)}
-						/>
+						></button>
 
 						<!-- Queued messages display -->
 						{#if messageQueue.length > 0}
 							<div
-								class="mb-1 mx-2 py-0.5 px-1.5 rounded-2xl bg-white dark:bg-gray-900/60 border border-gray-100 dark:border-gray-800/50 overflow-x-hidden overflow-y-auto max-h-[25vh]"
+								class="chat-shell-queue mb-1 mx-2 py-0.5 px-1.5 overflow-x-hidden overflow-y-auto max-h-[25vh]"
 							>
 								{#each messageQueue as queuedMessage (queuedMessage.id)}
 									<QueuedMessageItem
@@ -1203,15 +1217,15 @@
 
 						<div
 							id="message-input-container"
-							class="flex-1 flex flex-col relative w-full shadow-lg rounded-3xl border {$temporaryChatEnabled
-								? 'border-dashed border-gray-100 dark:border-gray-800 hover:border-gray-200 focus-within:border-gray-200 hover:dark:border-gray-700 focus-within:dark:border-gray-700'
-								: ' border-gray-100/30 dark:border-gray-850/30 hover:border-gray-200 focus-within:border-gray-100 hover:dark:border-gray-800 focus-within:dark:border-gray-800'}  transition px-1 bg-white/5 dark:bg-gray-500/5 backdrop-blur-sm dark:text-gray-100"
+							class="chat-shell-composer flex-1 flex flex-col relative w-full {$temporaryChatEnabled
+								? 'chat-shell-composer-temporary'
+								: ''} {hero ? 'chat-shell-composer-hero' : 'chat-shell-composer-inline'}"
 							dir={$settings?.chatDirection ?? 'auto'}
 						>
 							{#if atSelectedModel !== undefined}
-								<div class="px-3 pt-3 text-left w-full flex flex-col z-10">
+								<div class="chat-shell-targeted-model px-3 pt-3 text-left w-full flex flex-col z-10">
 									<div class="flex items-center justify-between w-full">
-										<div class="pl-[1px] flex items-center gap-2 text-sm dark:text-gray-500">
+										<div class="pl-[1px] flex items-center gap-2 text-sm">
 											<img
 												alt="model profile"
 												class="size-3.5 max-w-[28px] object-cover rounded-full {shouldUseOpenAILogo(atSelectedModel) ? 'dark:invert' : ''}"
@@ -1224,12 +1238,12 @@
 												<span class="">{getModelDisplayName(atSelectedModel.name, atSelectedModel.id)}</span>
 											</div>
 										</div>
-										<div>
-											<button
-												class="flex items-center dark:text-gray-500"
-												on:click={() => {
-													atSelectedModel = undefined;
-												}}
+											<div>
+												<button
+													class="flex items-center text-[var(--chat-shell-text-muted)]"
+													on:click={() => {
+														atSelectedModel = undefined;
+													}}
 											>
 												<XMark />
 											</button>
@@ -1239,10 +1253,7 @@
 							{/if}
 
 							{#if files.length > 0}
-								<div
-									class="mx-2 mt-2.5 pb-1.5 flex items-center flex-wrap gap-2"
-									dir={$settings?.chatDirection ?? 'auto'}
-								>
+								<div class="mx-2 mt-2.5 pb-1.5 flex items-center flex-wrap gap-2" dir={$settings?.chatDirection ?? 'auto'}>
 									{#each files as file, fileIdx}
 										{#if file.type === 'image' || (file?.content_type ?? '').startsWith('image/')}
 											{@const fileUrl =
@@ -1335,7 +1346,7 @@
 
 							<div class="px-2.5">
 								<div
-									class="scrollbar-hidden rtl:text-right ltr:text-left bg-transparent dark:text-gray-100 outline-hidden w-full pb-1 px-1 resize-none h-fit max-h-96 overflow-auto {files.length ===
+									class="chat-shell-input-scroll scrollbar-hidden rtl:text-right ltr:text-left bg-transparent outline-hidden w-full pb-1 px-1 resize-none h-fit max-h-96 overflow-auto {files.length ===
 									0
 										? atSelectedModel !== undefined
 											? 'pt-1.5'
@@ -1348,7 +1359,7 @@
 											<div class="mt-2.5 mr-3">
 												<button
 													type="button"
-													class="p-1 rounded-lg hover:bg-gray-100/50 dark:hover:bg-gray-800/50"
+													class="chat-shell-icon-button p-1 rounded-lg"
 													aria-label="Expand input"
 													on:click={async () => {
 														showInputModal = true;
@@ -1585,7 +1596,8 @@
 									>
 										<div
 											id="input-menu-button"
-											class="bg-transparent hover:bg-gray-100 text-gray-700 dark:text-white dark:hover:bg-gray-800 rounded-full size-8 flex justify-center items-center outline-hidden focus:outline-hidden"
+											class="chat-shell-icon-button size-8 flex justify-center items-center outline-hidden focus:outline-hidden"
+											aria-label={$i18n.t('Add attachment')}
 										>
 											<PlusAlt className="size-5.5" />
 										</div>
@@ -1594,7 +1606,7 @@
 									{#if showWebSearchButton || showImageGenerationButton || showCodeInterpreterButton || showToolsButton || (toggleFilters && toggleFilters.length > 0)}
 										<div
 											class="flex self-center w-[1px] h-4 mx-1 bg-gray-200/50 dark:bg-gray-800/50"
-										/>
+										></div>
 
 										<IntegrationsMenu
 											selectedModels={atSelectedModel ? [atSelectedModel.id] : selectedModels}
@@ -1624,7 +1636,8 @@
 										>
 											<div
 												id="integration-menu-button"
-												class="bg-transparent hover:bg-gray-100 text-gray-700 dark:text-white dark:hover:bg-gray-800 rounded-full size-8 flex justify-center items-center outline-hidden focus:outline-hidden"
+												class="chat-shell-icon-button size-8 flex justify-center items-center outline-hidden focus:outline-hidden"
+												aria-label={$i18n.t('Open tools and modes')}
 											>
 												<Component className="size-4.5" strokeWidth="1.5" />
 											</div>
@@ -1637,7 +1650,8 @@
 												<button
 													type="button"
 													id="model-valves-button"
-													class="bg-transparent hover:bg-gray-100 text-gray-700 dark:text-white dark:hover:bg-gray-800 rounded-full size-8 flex justify-center items-center outline-hidden focus:outline-hidden"
+													class="chat-shell-icon-button size-8 flex justify-center items-center outline-hidden focus:outline-hidden"
+													aria-label={$i18n.t('Open model valves')}
 													on:click={() => {
 														selectedValvesType = 'function';
 														selectedValvesItemId = selectedModelIds[0]?.split('.')[0];
@@ -1658,7 +1672,7 @@
 												})}
 											>
 												<button
-													class="translate-y-[0.5px] px-1 flex gap-1 items-center text-gray-600 dark:text-gray-300 hover:text-gray-700 dark:hover:text-gray-200 rounded-lg self-center transition"
+													class="chat-shell-text-button translate-y-[0.5px] px-1 flex gap-1 items-center rounded-lg self-center transition"
 													aria-label="Available Tools"
 													type="button"
 													on:click={() => {
@@ -1683,11 +1697,12 @@
 															selectedFilterIds = selectedFilterIds.filter((id) => id !== filterId);
 														}}
 														type="button"
-														class="group p-[7px] flex gap-1.5 items-center text-sm rounded-full transition-colors duration-300 focus:outline-hidden max-w-full overflow-hidden {selectedFilterIds.includes(
+														aria-label={filter?.name}
+														class="chat-shell-toggle-pill group p-[7px] flex gap-1.5 items-center text-sm rounded-full transition-colors duration-300 focus:outline-hidden max-w-full overflow-hidden {selectedFilterIds.includes(
 															filterId
 														)
-															? 'text-sky-500 dark:text-sky-300 bg-sky-50 hover:bg-sky-100 dark:bg-sky-400/10 dark:hover:bg-sky-600/10 border border-sky-200/40 dark:border-sky-500/20'
-															: 'bg-transparent text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 '} capitalize"
+															? 'chat-shell-toggle-pill-active'
+															: ''} capitalize"
 													>
 														{#if filter?.icon}
 															<div class="size-4 items-center flex justify-center">
@@ -1716,10 +1731,11 @@
 												<button
 													on:click|preventDefault={() => (webSearchEnabled = !webSearchEnabled)}
 													type="button"
-													class="group p-[7px] flex gap-1.5 items-center text-sm rounded-full transition-colors duration-300 focus:outline-hidden max-w-full overflow-hidden {webSearchEnabled ||
+													aria-label={$i18n.t('Toggle web search')}
+													class="chat-shell-toggle-pill group p-[7px] flex gap-1.5 items-center text-sm rounded-full transition-colors duration-300 focus:outline-hidden max-w-full overflow-hidden {webSearchEnabled ||
 													($settings?.webSearch ?? false) === 'always'
-														? ' text-sky-500 dark:text-sky-300 bg-sky-50 hover:bg-sky-100 dark:bg-sky-400/10 dark:hover:bg-sky-600/10 border border-sky-200/40 dark:border-sky-500/20'
-														: 'bg-transparent text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 '}"
+														? 'chat-shell-toggle-pill-active'
+														: ''}"
 												>
 													<GlobeAlt className="size-4" strokeWidth="1.75" />
 													<div class="hidden group-hover:block">
@@ -1735,9 +1751,10 @@
 													on:click|preventDefault={() =>
 														(imageGenerationEnabled = !imageGenerationEnabled)}
 													type="button"
-													class="group p-[7px] flex gap-1.5 items-center text-sm rounded-full transition-colors duration-300 focus:outline-hidden max-w-full overflow-hidden {imageGenerationEnabled
-														? ' text-sky-500 dark:text-sky-300 bg-sky-50 hover:bg-sky-100 dark:bg-sky-400/10 dark:hover:bg-sky-700/10 border border-sky-200/40 dark:border-sky-500/20'
-														: 'bg-transparent text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 '}"
+													aria-label={$i18n.t('Toggle image generation')}
+													class="chat-shell-toggle-pill group p-[7px] flex gap-1.5 items-center text-sm rounded-full transition-colors duration-300 focus:outline-hidden max-w-full overflow-hidden {imageGenerationEnabled
+														? 'chat-shell-toggle-pill-active'
+														: ''}"
 												>
 													<Photo className="size-4" strokeWidth="1.75" />
 													<div class="hidden group-hover:block">
@@ -1757,9 +1774,9 @@
 													on:click|preventDefault={() =>
 														(codeInterpreterEnabled = !codeInterpreterEnabled)}
 													type="button"
-													class=" group p-[7px] flex gap-1.5 items-center text-sm transition-colors duration-300 max-w-full overflow-hidden {codeInterpreterEnabled
-														? ' text-sky-500 dark:text-sky-300 bg-sky-50 hover:bg-sky-100 dark:bg-sky-400/10 dark:hover:bg-sky-700/10 border border-sky-200/40 dark:border-sky-500/20'
-														: 'bg-transparent text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 '} {($settings?.highContrastMode ??
+													class="chat-shell-toggle-pill group p-[7px] flex gap-1.5 items-center text-sm transition-colors duration-300 max-w-full overflow-hidden {codeInterpreterEnabled
+														? 'chat-shell-toggle-pill-active'
+														: ''} {($settings?.highContrastMode ??
 													false)
 														? 'm-1'
 														: 'focus:outline-hidden rounded-full'}"
@@ -1775,12 +1792,16 @@
 									</div>
 								</div>
 
-								<div class="self-end flex space-x-1 mr-1 shrink-0 gap-[0.5px]">
+								<div class="self-end flex items-center space-x-1 mr-1 shrink-0 gap-[0.5px]">
+									<div class="chat-shell-model-label hidden md:block max-w-[12rem] truncate">
+										{activeModelLabel}
+									</div>
 									{#if (taskIds && taskIds.length > 0) || (history.currentId && history.messages[history.currentId]?.done != true) || generating}
 										<div class=" flex items-center">
 											<Tooltip content={$i18n.t('Stop')}>
 												<button
-													class="bg-white hover:bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-white dark:hover:bg-gray-800 transition rounded-full p-1.5"
+													class="chat-shell-send-button chat-shell-send-button-secondary transition rounded-full p-1.5"
+													aria-label={$i18n.t('Stop')}
 													on:click={() => {
 														stopResponse();
 													}}
@@ -1806,8 +1827,9 @@
 											<Tooltip content={$i18n.t('Create note')} className=" flex items-center">
 												<button
 													id="create-note-button"
-													class=" text-gray-600 dark:text-gray-300 hover:text-gray-700 dark:hover:text-gray-200 transition rounded-full p-1.5 self-center"
+													class="chat-shell-icon-button rounded-full p-1.5 self-center"
 													type="button"
+													aria-label={$i18n.t('Create note')}
 													disabled={prompt === '' && files.length === 0}
 													on:click={() => {
 														createNote();
@@ -1829,7 +1851,7 @@
 												<Tooltip content={$i18n.t('Dictate')}>
 													<button
 														id="voice-input-button"
-														class=" text-gray-600 dark:text-gray-300 hover:text-gray-700 dark:hover:text-gray-200 transition rounded-full p-1.5 self-center mr-0.5"
+														class="chat-shell-icon-button transition rounded-full p-1.5 self-center mr-0.5"
 														type="button"
 														on:click={async () => {
 															try {
@@ -1880,8 +1902,9 @@
 												<!-- {$i18n.t('Call')} -->
 												<Tooltip content={$i18n.t('Voice mode')}>
 													<button
-														class=" bg-black text-white hover:bg-gray-900 dark:bg-white dark:text-black dark:hover:bg-gray-100 transition rounded-full p-1.5 self-center"
+														class="chat-shell-send-button transition rounded-full p-1.5 self-center"
 														type="button"
+														aria-label={$i18n.t('Voice mode')}
 														on:click={async () => {
 															if (selectedModels.length > 1) {
 																toast.error($i18n.t('Select only one model to call'));
@@ -1931,9 +1954,8 @@
 																	$i18n.t('Permission denied when accessing media devices')
 																);
 															}
-														}}
-														aria-label={$i18n.t('Voice mode')}
-													>
+															}}
+														>
 														<Voice className="size-5" strokeWidth="2.5" />
 													</button>
 												</Tooltip>
@@ -1947,9 +1969,9 @@
 												>
 													<button
 														id="send-message-button"
-														class="{!(prompt === '' && files.length === 0) || uploadPending
-															? 'bg-black text-white hover:bg-gray-900 dark:bg-white dark:text-black dark:hover:bg-gray-100 '
-															: 'text-white bg-gray-200 dark:text-gray-900 dark:bg-gray-700 disabled'} transition rounded-full p-1.5 self-center"
+														class="chat-shell-send-button {!(prompt === '' && files.length === 0) || uploadPending
+															? ''
+															: 'chat-shell-send-button-disabled'} transition rounded-full p-1.5 self-center"
 														type="submit"
 														disabled={(prompt === '' && files.length === 0) || uploadPending}
 													>
@@ -1983,7 +2005,7 @@
 								{@html DOMPurify.sanitize(marked($config?.license_metadata?.input_footer))}
 							</div>
 						{:else}
-							<div class="mb-1" />
+							<div class="mb-1"></div>
 						{/if}
 					</form>
 				</div>
