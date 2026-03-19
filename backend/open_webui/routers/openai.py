@@ -713,7 +713,7 @@ async def verify_connection(
                         json={
                             "model": model_ids[0],
                             "input": "ping",
-                            "max_output_tokens": 1,
+                            "max_output_tokens": 16,
                         },
                         ssl=AIOHTTP_CLIENT_SESSION_SSL,
                     ) as r:
@@ -941,6 +941,14 @@ def convert_to_responses_payload(payload: dict) -> dict:
 
     if system_content:
         responses_payload["instructions"] = system_content
+
+    # Responses API expects reasoning controls under `reasoning`.
+    if "reasoning_effort" in responses_payload:
+        reasoning = responses_payload.get("reasoning")
+        if not isinstance(reasoning, dict):
+            reasoning = {}
+        reasoning.setdefault("effort", responses_payload.pop("reasoning_effort"))
+        responses_payload["reasoning"] = reasoning
 
     if "max_completion_tokens" in responses_payload:
         responses_payload["max_output_tokens"] = responses_payload.pop(

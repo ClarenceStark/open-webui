@@ -558,6 +558,7 @@ def deep_merge(target, source):
 def handle_responses_streaming_event(
     data: dict,
     current_output: list,
+    response_started_at: float | None = None,
 ) -> tuple[list, dict | None]:
     """
     Handle Responses API streaming events in a pure functional way.
@@ -575,13 +576,46 @@ def handle_responses_streaming_event(
     # Note: treating current_output as immutable, but avoiding full deepcopy for perf.
     # We will shallow copy only if we need to modify the list structure or items.
 
+    def with_reasoning_timing(item: dict, previous_item: dict | None = None) -> dict:
+        if item.get("type") != "reasoning":
+            return item
+
+        updated_item = item.copy()
+        started_at = updated_item.get("started_at") or (
+            previous_item.get("started_at") if previous_item else None
+        )
+
+        if started_at is None:
+            started_at = response_started_at or time.time()
+
+        updated_item["started_at"] = started_at
+
+        status = updated_item.get("status")
+        is_completed = status == "completed"
+
+        if is_completed:
+            ended_at = updated_item.get("ended_at") or time.time()
+            updated_item["ended_at"] = ended_at
+            computed_duration = max(0, int(ended_at - started_at))
+            existing_duration = updated_item.get("duration")
+
+            # Responses API may report reasoning duration as 0 or omit it
+            # entirely. Prefer our locally measured elapsed wall time once the
+            # reasoning item is complete so the UI reflects the real wait.
+            if existing_duration is None or existing_duration <= 0:
+                updated_item["duration"] = computed_duration
+            else:
+                updated_item["duration"] = max(existing_duration, computed_duration)
+
+        return updated_item
+
     event_type = data.get("type", "")
 
     if event_type == "response.output_item.added":
         item = data.get("item", {})
         if item:
             new_output = list(current_output)
-            new_output.append(item)
+            new_output.append(with_reasoning_timing(item))
             return new_output, None
         return current_output, None
 
@@ -748,6 +782,20 @@ def handle_responses_streaming_event(
 
             return new_output, None
 
+    elif event_type == "response.output_item.done":
+        # Delta Event: Output item complete
+        item = data.get("item")
+        output_index = data.get("output_index", len(current_output) - 1)
+
+        new_output = list(current_output)
+        if item and 0 <= output_index < len(current_output):
+            new_output[output_index] = with_reasoning_timing(
+                item, current_output[output_index]
+            )
+        elif item:
+            new_output.append(with_reasoning_timing(item))
+        return new_output, {}
+
     elif event_type.startswith("response.") and event_type.endswith(".done"):
         # Delta Events: response.content_part.done, response.text.done, etc.
         parts = event_type.split(".")
@@ -804,6 +852,7 @@ def handle_responses_streaming_event(
             elif type_name not in ["completed", "failed"]:
                 output_index = data.get("output_index", len(current_output) - 1)
                 if current_output and 0 <= output_index < len(current_output):
+                    previous_item = current_output[output_index]
 
                     key = (
                         "text"
@@ -839,24 +888,14 @@ def handle_responses_streaming_event(
                                     part[key] = final_value
                         elif item_type == "reasoning":
                             item["status"] = "completed"
+                            item = with_reasoning_timing(item, previous_item)
+                            new_output[output_index] = item
                         else:
                             item[key] = final_value
 
                         return new_output, {}
 
         return current_output, None
-
-    elif event_type == "response.output_item.done":
-        # Delta Event: Output item complete
-        item = data.get("item")
-        output_index = data.get("output_index", len(current_output) - 1)
-
-        new_output = list(current_output)
-        if item and 0 <= output_index < len(current_output):
-            new_output[output_index] = item
-        elif item:
-            new_output.append(item)
-        return new_output, {}
 
     elif event_type == "response.completed":
         # State Machine Event: Completed
@@ -867,12 +906,16 @@ def handle_responses_streaming_event(
 
         # Ensure reasoning items are marked as completed in the final output
         if new_output:
-            for item in new_output:
-                if (
-                    item.get("type") == "reasoning"
-                    and item.get("status") != "completed"
-                ):
-                    item["status"] = "completed"
+            for index, item in enumerate(new_output):
+                previous_item = (
+                    current_output[index] if index < len(current_output) else None
+                )
+
+                if item.get("type") == "reasoning":
+                    if item.get("status") != "completed":
+                        item["status"] = "completed"
+
+                    new_output[index] = with_reasoning_timing(item, previous_item)
 
         return new_output, {"usage": response_data.get("usage"), "done": True}
 
@@ -3612,6 +3655,7 @@ async def streaming_chat_response_handler(response, ctx):
                     nonlocal usage
                     nonlocal output
 
+                    response_started_at = time.time()
                     response_tool_calls = []
 
                     delta_count = 0
@@ -3715,7 +3759,11 @@ async def streaming_chat_response_handler(response, ctx):
                                 # Check for Responses API events (type field starts with "response.")
                                 elif data.get("type", "").startswith("response."):
                                     output, response_metadata = (
-                                        handle_responses_streaming_event(data, output)
+                                        handle_responses_streaming_event(
+                                            data,
+                                            output,
+                                            response_started_at=response_started_at,
+                                        )
                                     )
 
                                     processed_data = {

@@ -683,7 +683,8 @@ async def generate_emoji(
             {"max_tokens": 4}
             if models[task_model_id].get("owned_by") == "ollama"
             else {
-                "max_completion_tokens": 4,
+                # Some Responses API models enforce a minimum completion budget.
+                "max_completion_tokens": 16,
             }
         ),
         "metadata": {
