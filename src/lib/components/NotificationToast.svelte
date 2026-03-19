@@ -109,7 +109,11 @@
 	</button>
 
 	<div class="shrink-0 self-top -translate-y-0.5">
-		<img src="{WEBUI_BASE_URL}/openai-mark.svg" alt="favicon" class="size-6 rounded-xl" />
+		<img
+			src="{WEBUI_BASE_URL}/openai-mark.svg"
+			alt="favicon"
+			class="size-6 rounded-xl dark:invert"
+		/>
 	</div>
 
 	<div>

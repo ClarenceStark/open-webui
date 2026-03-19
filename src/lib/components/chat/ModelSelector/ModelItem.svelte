@@ -1,10 +1,8 @@
 <script lang="ts">
 	import { getContext } from 'svelte';
 
-	import { WEBUI_API_BASE_URL } from '$lib/constants';
 	import Check from '$lib/components/icons/Check.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
-
 	const i18n = getContext('i18n');
 
 	export let selectedModelIdx: number = -1;
@@ -30,21 +28,12 @@
 	}}
 >
 	<div class="flex items-start gap-3 flex-1 min-w-0">
-		<div class="flex items-center min-w-fit pt-0.5">
-			<Tooltip content={item.value} placement="top-start">
-				<img
-					src={`${WEBUI_API_BASE_URL}/models/model/profile/image?id=${item.model.id}&lang=${$i18n.language}`}
-					alt={$i18n.t('{{modelName}} profile image', { modelName: item.label })}
-					class="rounded-full size-6 flex items-center"
-					loading="lazy"
-				/>
-			</Tooltip>
-		</div>
-
 		<div class="flex-1 min-w-0">
-			<div class="font-medium line-clamp-1 tracking-[0.02em]">
-				{item.label}
-			</div>
+			<Tooltip content={item.value} placement="top-start">
+				<div class="font-medium line-clamp-1 tracking-[0.02em]">
+					{item.label}
+				</div>
+			</Tooltip>
 
 			{#if item.description}
 				<div class="mt-0.5 text-xs leading-5 text-gray-500 dark:text-gray-400 line-clamp-2">

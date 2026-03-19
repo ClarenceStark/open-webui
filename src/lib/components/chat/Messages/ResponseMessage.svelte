@@ -36,7 +36,7 @@
 		removeDetails,
 		removeAllDetails
 	} from '$lib/utils';
-	import { getModelDisplayName } from '$lib/utils/model-display';
+	import { getModelAvatarSrc, getModelDisplayName } from '$lib/utils/model-display';
 	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
 
 	import Name from './Name.svelte';
@@ -822,7 +822,7 @@
 	>
 		<div class={`shrink-0 ltr:mr-3 rtl:ml-3 hidden @lg:flex mt-1 `}>
 			<ProfileImage
-				src={`${WEBUI_API_BASE_URL}/models/model/profile/image?id=${model?.id}&lang=${$i18n.language}`}
+				src={getModelAvatarSrc(model, $i18n.language)}
 				className={'size-8 assistant-message-profile-image'}
 			/>
 		</div>

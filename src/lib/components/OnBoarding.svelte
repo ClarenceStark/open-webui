@@ -34,7 +34,7 @@
 						id="logo"
 						crossorigin="anonymous"
 						src="{WEBUI_BASE_URL}/openai-mark.svg"
-						class="w-6 rounded-xl"
+						class="w-6 rounded-xl dark:invert"
 						alt="logo"
 					/>
 				</div>

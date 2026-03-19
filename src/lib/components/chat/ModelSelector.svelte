@@ -1,29 +1,11 @@
 <script lang="ts">
-	import { models, showSettings, settings, user, mobile, config } from '$lib/stores';
-	import { onMount, tick, getContext } from 'svelte';
-	import { toast } from 'svelte-sonner';
+	import { models, settings } from '$lib/stores';
+	import { getContext } from 'svelte';
 	import Selector from './ModelSelector/Selector.svelte';
 	import { getModelDisplayName, getModelShortDescription } from '$lib/utils/model-display';
-
-	import { updateUserSettings } from '$lib/apis/users';
 	const i18n = getContext('i18n');
 
 	export let selectedModels = [''];
-	export let disabled = false;
-
-	export let showSetDefault = true;
-
-	const saveDefaultModel = async () => {
-		const hasEmptyModel = selectedModels.filter((it) => it === '');
-		if (hasEmptyModel.length) {
-			toast.error($i18n.t('Choose a model before saving...'));
-			return;
-		}
-		settings.set({ ...$settings, models: selectedModels });
-		await updateUserSettings(localStorage.token, { ui: $settings });
-
-		toast.success($i18n.t('Default model updated'));
-	};
 
 	const pinModelHandler = async (modelId) => {
 		let pinnedModels = $settings?.pinnedModels ?? [];
@@ -74,11 +56,3 @@
 		</div>
 	{/each}
 </div>
-
-{#if showSetDefault}
-	<div
-		class="relative text-left mt-[1px] ml-1 text-[0.7rem] text-gray-600 dark:text-gray-400 font-primary"
-	>
-		<button on:click={saveDefaultModel}> {$i18n.t('Set as default')}</button>
-	</div>
-{/if}

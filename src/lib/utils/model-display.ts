@@ -1,4 +1,5 @@
 import type { Model } from '$lib/stores';
+import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
 
 const collapseWhitespace = (value: string) => value.replace(/\s+/g, ' ').trim();
 
@@ -14,10 +15,35 @@ export const getModelDisplayName = (
 	fallback = 'MODEL'
 ) => {
 	const base = (name ?? id ?? fallback).trim();
+	const normalized = (base || fallback).toLowerCase();
+
+	if (normalized === 'gpt-5.4-pro') {
+		return 'GPT-5.4-Pro';
+	}
+
 	return (base || fallback).toUpperCase();
 };
 
+const getKnownOpenAIModelDescription = (model?: Partial<Model> & Record<string, any>) => {
+	const modelId = (model?.id ?? model?.name ?? '').toLowerCase();
+
+	if (modelId === 'gpt-5.4') {
+		return "Our most capable and efficient frontier model for professional work.";
+	}
+
+	if (modelId === 'gpt-5.4-pro') {
+		return 'Uses more compute to think harder for maximum performance on complex tasks.';
+	}
+
+	return '';
+};
+
 export const getModelShortDescription = (model?: Partial<Model> & Record<string, any>) => {
+	const knownDescription = getKnownOpenAIModelDescription(model);
+	if (knownDescription) {
+		return knownDescription;
+	}
+
 	const description = stripMarkup(model?.info?.meta?.description ?? '');
 	if (description) {
 		return truncate(description);
@@ -46,4 +72,21 @@ export const getModelShortDescription = (model?: Partial<Model> & Record<string,
 	return capabilityLabels.length > 0
 		? `${sourceLabel} · ${capabilityLabels.slice(0, 2).join(' · ')}`
 		: sourceLabel;
+};
+
+export const shouldUseOpenAILogo = (model?: Partial<Model> & Record<string, any>) => {
+	const modelId = (model?.id ?? model?.name ?? '').toLowerCase();
+	return model?.owned_by === 'openai' || modelId === 'gpt-5.4' || modelId === 'gpt-5.4-pro';
+};
+
+export const getModelAvatarSrc = (
+	model?: Partial<Model> & Record<string, any>,
+	lang = 'en'
+) => {
+	if (shouldUseOpenAILogo(model)) {
+		return `${WEBUI_BASE_URL}/openai-mark.svg`;
+	}
+
+	const modelId = model?.id ?? model?.value ?? '';
+	return `${WEBUI_API_BASE_URL}/models/model/profile/image?id=${modelId}&lang=${lang}`;
 };

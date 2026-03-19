@@ -6,7 +6,7 @@
 	import ProfileImage from '../Messages/ProfileImage.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import Heart from '$lib/components/icons/Heart.svelte';
-	import { getModelDisplayName } from '$lib/utils/model-display';
+	import { getModelAvatarSrc, getModelDisplayName } from '$lib/utils/model-display';
 
 	const i18n = getContext('i18n');
 
@@ -45,7 +45,7 @@
 		{:else}
 			<div class="flex w-full">
 				<ProfileImage
-					src={`${WEBUI_API_BASE_URL}/models/model/profile/image?id=${data.model?.id ?? data.message.model}&lang=${$i18n.language}`}
+					src={getModelAvatarSrc(data.model ?? { id: data.message.model }, $i18n.language)}
 					className={'size-5 -translate-y-[1px] flex-shrink-0'}
 				/>
 

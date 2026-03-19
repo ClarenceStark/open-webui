@@ -31,7 +31,7 @@
 			>
 				<img
 					src="{WEBUI_BASE_URL}/openai-mark.svg"
-					class="size-11 p-0.5"
+					class="size-11 p-0.5 dark:invert"
 					alt="logo"
 					draggable="false"
 				/>
@@ -56,7 +56,7 @@
 		>
 			<img
 				src="{WEBUI_BASE_URL}/openai-mark.svg"
-				class="size-10 {selected === '' ? 'rounded-2xl' : 'rounded-full'}"
+				class="size-10 dark:invert {selected === '' ? 'rounded-2xl' : 'rounded-full'}"
 				alt="logo"
 				draggable="false"
 			/>

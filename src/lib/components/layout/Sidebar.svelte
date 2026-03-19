@@ -706,7 +706,7 @@
 						<div class=" self-center flex items-center justify-center size-9">
 							<img
 								src="{WEBUI_BASE_URL}/openai-mark.svg"
-								class="sidebar-new-chat-icon size-6 rounded-2xl group-hover:hidden"
+								class="sidebar-new-chat-icon size-6 rounded-2xl group-hover:hidden dark:invert"
 								alt=""
 							/>
 
@@ -901,7 +901,7 @@
 					<img
 						crossorigin="anonymous"
 						src="{WEBUI_BASE_URL}/openai-mark.svg"
-						class="sidebar-new-chat-icon size-6 rounded-2xl"
+						class="sidebar-new-chat-icon size-6 rounded-2xl dark:invert"
 						alt=""
 					/>
 				</a>

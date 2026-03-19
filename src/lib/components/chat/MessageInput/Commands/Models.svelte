@@ -5,9 +5,12 @@
 	import { tick, getContext } from 'svelte';
 
 	import { models } from '$lib/stores';
-	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
-	import { getModelDisplayName } from '$lib/utils/model-display';
+	import {
+		getModelAvatarSrc,
+		getModelDisplayName,
+		shouldUseOpenAILogo
+	} from '$lib/utils/model-display';
 
 	const i18n = getContext('i18n');
 
@@ -84,9 +87,9 @@
 			>
 				<div class="flex text-black dark:text-gray-100 line-clamp-1">
 					<img
-						src={`${WEBUI_API_BASE_URL}/models/model/profile/image?id=${model.id}&lang=${$i18n.language}`}
+						src={getModelAvatarSrc(model, $i18n.language)}
 						alt={model?.name ?? model.id}
-						class="rounded-full size-5 items-center mr-2"
+						class="rounded-full size-5 items-center mr-2 {shouldUseOpenAILogo(model) ? 'dark:invert' : ''}"
 					/>
 					<div class="truncate">
 						{getModelDisplayName(model?.name, model?.id)}

@@ -229,7 +229,7 @@
 										id="logo"
 										crossorigin="anonymous"
 										src="{WEBUI_BASE_URL}/openai-mark.svg"
-										class="size-24 rounded-full"
+										class="size-24 rounded-full dark:invert"
 										alt="{$WEBUI_NAME} logo"
 									/>
 								</div>
@@ -581,7 +581,7 @@
 							id="logo"
 							crossorigin="anonymous"
 							src="{WEBUI_BASE_URL}/openai-mark.svg"
-							class=" w-6 rounded-full"
+							class="w-6 rounded-full dark:invert"
 							alt=""
 						/>
 					</div>

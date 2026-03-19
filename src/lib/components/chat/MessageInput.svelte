@@ -52,6 +52,11 @@
 		getUserTimezone,
 		getWeekday
 	} from '$lib/utils';
+	import {
+		getModelAvatarSrc,
+		getModelDisplayName,
+		shouldUseOpenAILogo
+	} from '$lib/utils/model-display';
 	import { uploadFile } from '$lib/apis/files';
 	import { generateAutoCompletion } from '$lib/apis';
 	import { deleteFileById } from '$lib/apis/files';
@@ -1209,11 +1214,14 @@
 										<div class="pl-[1px] flex items-center gap-2 text-sm dark:text-gray-500">
 											<img
 												alt="model profile"
-												class="size-3.5 max-w-[28px] object-cover rounded-full"
-												src={`${WEBUI_API_BASE_URL}/models/model/profile/image?id=${$models.find((model) => model.id === atSelectedModel.id).id}&lang=${$i18n.language}`}
+												class="size-3.5 max-w-[28px] object-cover rounded-full {shouldUseOpenAILogo(atSelectedModel) ? 'dark:invert' : ''}"
+												src={getModelAvatarSrc(
+													$models.find((model) => model.id === atSelectedModel.id),
+													$i18n.language
+												)}
 											/>
 											<div class="translate-y-[0.5px]">
-												<span class="">{atSelectedModel.name}</span>
+												<span class="">{getModelDisplayName(atSelectedModel.name, atSelectedModel.id)}</span>
 											</div>
 										</div>
 										<div>
