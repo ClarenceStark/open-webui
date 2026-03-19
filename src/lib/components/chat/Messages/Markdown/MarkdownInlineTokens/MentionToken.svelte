@@ -8,6 +8,7 @@
 	import { channels, models } from '$lib/stores';
 	import UserStatus from '$lib/components/channel/Messages/Message/UserStatus.svelte';
 	import UserStatusLinkPreview from '$lib/components/channel/Messages/Message/UserStatusLinkPreview.svelte';
+	import { getModelDisplayName } from '$lib/utils/model-display';
 
 	const i18n = getContext('i18n');
 
@@ -72,7 +73,7 @@
 				// Model
 				const model = $models.find((m) => m.id === id);
 				if (model) {
-					label = model.name;
+					label = getModelDisplayName(model.name, model.id);
 				} else {
 					label = $i18n.t('Unknown');
 				}

@@ -3,7 +3,7 @@
 	import { onMount, tick, getContext } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import Selector from './ModelSelector/Selector.svelte';
-	import Tooltip from '../common/Tooltip.svelte';
+	import { getModelDisplayName, getModelShortDescription } from '$lib/utils/model-display';
 
 	import { updateUserSettings } from '$lib/apis/users';
 	const i18n = getContext('i18n');
@@ -38,13 +38,13 @@
 		await updateUserSettings(localStorage.token, { ui: $settings });
 	};
 
-	$: if (selectedModels.length > 0 && $models.length > 0) {
-		const _selectedModels = selectedModels.map((model) =>
-			$models.map((m) => m.id).includes(model) ? model : ''
-		);
+	$: if ($models.length > 0) {
+		const availableModelIds = new Set($models.map((m) => m.id));
+		const firstValidModel = selectedModels.find((model) => availableModelIds.has(model)) ?? '';
+		const nextSelectedModels = [firstValidModel];
 
-		if (JSON.stringify(_selectedModels) !== JSON.stringify(selectedModels)) {
-			selectedModels = _selectedModels;
+		if (JSON.stringify(nextSelectedModels) !== JSON.stringify(selectedModels)) {
+			selectedModels = nextSelectedModels;
 		}
 	}
 </script>
@@ -57,9 +57,13 @@
 					<Selector
 						id={`${selectedModelIdx}`}
 						placeholder={$i18n.t('Select a model')}
-						items={$models.map((model) => ({
+						searchEnabled={false}
+						items={$models
+							.filter((model) => model?.owned_by !== 'arena' && !(model?.info?.meta?.hidden ?? false))
+							.map((model) => ({
 							value: model.id,
-							label: model.name,
+							label: getModelDisplayName(model.name, model.id),
+							description: getModelShortDescription(model),
 							model: model
 						}))}
 						{pinModelHandler}
@@ -67,62 +71,6 @@
 					/>
 				</div>
 			</div>
-
-			{#if $user?.role === 'admin' || ($user?.permissions?.chat?.multiple_models ?? true)}
-				{#if selectedModelIdx === 0}
-					<div
-						class="  self-center mx-1 disabled:text-gray-600 disabled:hover:text-gray-600 -translate-y-[0.5px]"
-					>
-						<Tooltip content={$i18n.t('Add Model')}>
-							<button
-								class=" "
-								{disabled}
-								on:click={() => {
-									selectedModels = [...selectedModels, ''];
-								}}
-								aria-label="Add Model"
-							>
-								<svg
-									xmlns="http://www.w3.org/2000/svg"
-									fill="none"
-									viewBox="0 0 24 24"
-									stroke-width="2"
-									stroke="currentColor"
-									class="size-3.5"
-								>
-									<path stroke-linecap="round" stroke-linejoin="round" d="M12 6v12m6-6H6" />
-								</svg>
-							</button>
-						</Tooltip>
-					</div>
-				{:else}
-					<div
-						class="  self-center mx-1 disabled:text-gray-600 disabled:hover:text-gray-600 -translate-y-[0.5px]"
-					>
-						<Tooltip content={$i18n.t('Remove Model')}>
-							<button
-								{disabled}
-								on:click={() => {
-									selectedModels.splice(selectedModelIdx, 1);
-									selectedModels = selectedModels;
-								}}
-								aria-label="Remove Model"
-							>
-								<svg
-									xmlns="http://www.w3.org/2000/svg"
-									fill="none"
-									viewBox="0 0 24 24"
-									stroke-width="2"
-									stroke="currentColor"
-									class="size-3"
-								>
-									<path stroke-linecap="round" stroke-linejoin="round" d="M19.5 12h-15" />
-								</svg>
-							</button>
-						</Tooltip>
-					</div>
-				{/if}
-			{/if}
 		</div>
 	{/each}
 </div>

@@ -4,6 +4,7 @@
 	const i18n = getContext('i18n');
 
 	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
+	import { getModelDisplayName } from '$lib/utils/model-display';
 
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import PinSlash from '$lib/components/icons/PinSlash.svelte';
@@ -44,7 +45,7 @@
 
 			<div class="flex self-center translate-y-[0.5px]">
 				<div class=" self-center text-sm font-primary line-clamp-1">
-					{model?.name ?? model.id}
+					{getModelDisplayName(model?.name, model?.id)}
 				</div>
 			</div>
 		</a>

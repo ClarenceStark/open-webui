@@ -7,6 +7,7 @@
 	import { models } from '$lib/stores';
 	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
+	import { getModelDisplayName } from '$lib/utils/model-display';
 
 	const i18n = getContext('i18n');
 
@@ -88,7 +89,7 @@
 						class="rounded-full size-5 items-center mr-2"
 					/>
 					<div class="truncate">
-						{model.name}
+						{getModelDisplayName(model?.name, model?.id)}
 					</div>
 				</div>
 			</button>

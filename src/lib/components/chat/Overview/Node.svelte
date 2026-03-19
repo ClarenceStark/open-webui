@@ -6,6 +6,7 @@
 	import ProfileImage from '../Messages/ProfileImage.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import Heart from '$lib/components/icons/Heart.svelte';
+	import { getModelDisplayName } from '$lib/utils/model-display';
 
 	const i18n = getContext('i18n');
 
@@ -51,7 +52,7 @@
 				<div class="ml-2">
 					<div class=" flex justify-between items-center">
 						<div class="text-xs text-black dark:text-white font-medium line-clamp-1">
-							{data?.model?.name ?? data?.message?.model ?? 'Assistant'}
+							{getModelDisplayName(data?.model?.name, data?.message?.model, 'ASSISTANT')}
 						</div>
 
 						<button

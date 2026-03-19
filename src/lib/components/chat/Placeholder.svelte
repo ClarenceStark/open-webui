@@ -19,6 +19,7 @@
 		chats,
 		currentChatPage
 	} from '$lib/stores';
+	import { getModelDisplayName } from '$lib/utils/model-display';
 	import { sanitizeResponseContent, extractCurlyBraceWords } from '$lib/utils';
 	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
 
@@ -117,7 +118,7 @@
 									<button
 										aria-hidden={models.length <= 1}
 										aria-label={$i18n.t('Get information on {{name}} in the UI', {
-											name: models[modelIdx]?.name
+											name: getModelDisplayName(models[modelIdx]?.name, models[modelIdx]?.id)
 										})}
 										on:click={() => {
 											selectedModelIdx = modelIdx;
@@ -141,12 +142,18 @@
 					>
 						{#if models[selectedModelIdx]?.name}
 							<Tooltip
-								content={models[selectedModelIdx]?.name}
+								content={getModelDisplayName(
+									models[selectedModelIdx]?.name,
+									models[selectedModelIdx]?.id
+								)}
 								placement="top"
 								className=" flex items-center "
 							>
 								<span class="line-clamp-1">
-									{models[selectedModelIdx]?.name}
+									{getModelDisplayName(
+										models[selectedModelIdx]?.name,
+										models[selectedModelIdx]?.id
+									)}
 								</span>
 							</Tooltip>
 						{:else}
