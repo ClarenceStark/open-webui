@@ -30,6 +30,48 @@
 	font-display: swap;
 }
 
+@font-face {
+	font-family: 'Source Han Serif SC';
+	src:
+		local('Source Han Serif SC'),
+		local('Source Han Serif CN'),
+		local('Source Han Serif - Pan-CJK Simplified Chinese'),
+		local('Noto Serif CJK SC');
+	font-display: swap;
+}
+
+@font-face {
+	font-family: 'Chat Shell Message Serif';
+	src:
+		local('Source Han Serif SC'),
+		local('Source Han Serif CN'),
+		local('Source Han Serif - Pan-CJK Simplified Chinese'),
+		local('Noto Serif CJK SC');
+	unicode-range:
+		U+2E80-2EFF,
+		U+2F00-2FDF,
+		U+3000-303F,
+		U+31C0-31EF,
+		U+3400-4DBF,
+		U+4E00-9FFF,
+		U+F900-FAFF,
+		U+FF00-FFEF;
+	size-adjust: 100%;
+	font-display: swap;
+}
+
+@font-face {
+	font-family: 'Chat Shell Message Serif';
+	src:
+		local('Iowan Old Style'),
+		local('Baskerville'),
+		local('Times New Roman'),
+		local('Georgia');
+	unicode-range: U+0000-024F, U+1E00-1EFF, U+2000-206F;
+	size-adjust: 132%;
+	font-display: swap;
+}
+
 /* --app-text-scale is updated via the UI Scale slider (Interface.svelte) */
 :root {
 	--app-text-scale: 1;
@@ -162,6 +204,7 @@ body.chat-shell-active {
 	background: var(--chat-shell-sidebar-bg) !important;
 	border-right: 1px solid rgba(255, 255, 255, 0.06);
 	color: var(--chat-shell-text-soft);
+	font-size: 1.04rem;
 }
 
 .chat-shell-sidebar #sidebar-webui-name {
@@ -187,6 +230,19 @@ body.chat-shell-active {
 .chat-shell-sidebar .sidebar > button {
 	color: var(--chat-shell-text-soft);
 	text-align: left;
+	font-size: 1.04rem;
+}
+
+.chat-shell-sidebar #sidebar-new-chat-button,
+.chat-shell-sidebar #sidebar-search-button {
+	grid-template-columns: 1.75rem minmax(0, 1fr) auto;
+	column-gap: 0.55rem;
+}
+
+.chat-shell-sidebar #sidebar-notes-button,
+.chat-shell-sidebar #sidebar-workspace-button {
+	grid-template-columns: 1.75rem minmax(0, 1fr);
+	column-gap: 0.55rem;
 }
 
 .chat-shell-sidebar #sidebar-new-chat-button .min-w-0,
@@ -198,16 +254,16 @@ body.chat-shell-active {
 }
 
 .chat-shell-sidebar .sidebar-new-chat-glyph {
-	width: 1.85rem;
-	height: 1.85rem;
+	width: 1.75rem;
+	height: 1.75rem;
 	border-radius: 999px;
 	background: #393835;
 	color: var(--chat-shell-text);
 }
 
 .chat-shell-sidebar .sidebar-nav-icon {
-	width: 1.85rem;
-	height: 1.85rem;
+	width: 1.75rem;
+	height: 1.75rem;
 	display: flex;
 	align-items: center;
 	justify-content: center;
@@ -280,13 +336,20 @@ body.chat-shell-active {
 	color: inherit;
 }
 
+.chat-shell-sidebar .text-xs {
+	font-size: 0.88rem !important;
+}
+
+.chat-shell-sidebar .text-sm {
+	font-size: 1rem !important;
+}
+
 .chat-shell #chat-navbar {
 	padding-top: 0.6rem;
 }
 
 .chat-shell #navbar-bg-gradient-to-b {
-	background: var(--chat-shell-bg) !important;
-	opacity: 0.98;
+	display: none !important;
 }
 
 .chat-shell #chat-navbar button,
@@ -302,13 +365,22 @@ body.chat-shell-active {
 
 .chat-shell {
 	--chat-shell-input-max-width: 56rem;
+	--chat-shell-input-side-padding: 0.625rem;
 	--chat-shell-assistant-gap: 4ch;
+	--chat-shell-composer-height-scale: 1.2;
 }
 
-.chat-shell-input-stage,
+.chat-shell-input-stage {
+	position: relative;
+	width: 100%;
+	max-width: var(--chat-shell-input-max-width);
+	margin-inline: auto;
+}
+
 .chat-shell-composer-wrap {
 	position: relative;
-	width: min(100%, var(--chat-shell-input-max-width));
+	width: 100%;
+	max-width: 100%;
 	margin-inline: auto;
 }
 
@@ -319,18 +391,38 @@ body.chat-shell-active {
 
 .chat-shell-message-frame {
 	width: 100%;
+	box-sizing: border-box;
+	padding-inline: var(--chat-shell-input-side-padding);
 	margin-inline: auto;
 }
 
 .chat-shell-message-frame-user {
-	max-width: min(100%, var(--chat-shell-input-max-width));
+	width: 100%;
+	max-width: var(--chat-shell-input-max-width);
 }
 
 .chat-shell-message-frame-assistant {
-	max-width: min(
-		calc(var(--chat-shell-input-max-width) - var(--chat-shell-assistant-gap)),
-		calc(100% - 1rem)
+	width: calc(
+		100% - var(--chat-shell-assistant-gap) - (var(--chat-shell-input-side-padding) * 2)
 	);
+	max-width: calc(
+		var(--chat-shell-input-max-width) -
+			var(--chat-shell-assistant-gap) -
+			(var(--chat-shell-input-side-padding) * 2)
+	);
+}
+
+.chat-shell .chat-user,
+.chat-shell .chat-assistant {
+	font-family:
+		'Chat Shell Message Serif',
+		'Source Han Serif SC',
+		'Source Han Serif - Pan-CJK Simplified Chinese',
+		'Noto Serif CJK SC',
+		'Songti SC',
+		serif;
+	font-size: 1.08rem;
+	line-height: 1.72;
 }
 
 .chat-shell-form {
@@ -344,7 +436,7 @@ body.chat-shell-active {
 }
 
 .chat-shell-composer {
-	padding: 0.28rem;
+	padding: calc(0.28rem * var(--chat-shell-composer-height-scale));
 	border: 0.5px solid var(--chat-shell-border);
 	border-radius: 2rem;
 	background: var(--chat-shell-input-bg);
@@ -358,12 +450,13 @@ body.chat-shell-active {
 }
 
 .chat-shell-composer-hero {
-	min-height: 7.4rem;
+	min-height: calc(7.4rem * var(--chat-shell-composer-height-scale));
 	border-radius: 2.1rem;
 }
 
 .chat-shell-composer-inline {
 	border-radius: 1.75rem;
+	min-height: calc(4.8rem * var(--chat-shell-composer-height-scale));
 }
 
 .chat-shell-composer-temporary {
@@ -448,9 +541,15 @@ body.chat-shell-active {
 	color: var(--chat-shell-text);
 }
 
+@media (min-width: 1024px) and (max-width: 1535px) {
+	.chat-shell {
+		--chat-shell-input-max-width: 70%;
+	}
+}
+
 @media (min-width: 1536px) {
 	.chat-shell {
-		--chat-shell-input-max-width: 60rem;
+		--chat-shell-input-max-width: 55%;
 	}
 }
 

@@ -75,7 +75,7 @@
 	});
 </script>
 
-<div class="chat-shell-placeholder m-auto w-full max-w-6xl px-2 @2xl:px-20 py-16 text-center">
+<div class="chat-shell-placeholder m-auto w-full max-w-full px-0 py-16 text-center">
 	{#if $temporaryChatEnabled}
 		<Tooltip
 			content={$i18n.t("This chat won't appear in history and your messages will not be saved.")}
@@ -113,7 +113,7 @@
 				</div>
 			{/if}
 
-			<div class="text-base font-normal md:max-w-4xl w-full py-3 {atSelectedModel ? 'mt-2' : ''}">
+			<div class="chat-shell-input-stage text-base font-normal w-full py-3 {atSelectedModel ? 'mt-2' : ''}">
 				<MessageInput
 					bind:this={messageInput}
 					{history}

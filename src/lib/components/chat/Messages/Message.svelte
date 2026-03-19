@@ -47,7 +47,7 @@
 
 <div
 	role="listitem"
-	class="chat-shell-message-frame flex flex-col justify-between px-3 mb-3 w-full rounded-lg group {history.messages[messageId]?.role ===
+	class="chat-shell-message-frame flex flex-col justify-between px-0 mb-3 w-full rounded-lg group {history.messages[messageId]?.role ===
 	'user'
 		? 'chat-shell-message-frame-user'
 		: 'chat-shell-message-frame-assistant'}"
