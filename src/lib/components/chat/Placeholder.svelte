@@ -15,7 +15,7 @@
 		chats,
 		currentChatPage
 	} from '$lib/stores';
-	import { getModelDisplayName } from '$lib/utils/model-display';
+	import { getModelShortDescription } from '$lib/utils/model-display';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import EyeSlash from '$lib/components/icons/EyeSlash.svelte';
 	import MessageInput from './MessageInput.svelte';
@@ -55,41 +55,19 @@
 
 	export let dragged = false;
 
+	let greetingPeriod = 'Hello';
 	let models = [];
 	let selectedModelIdx = 0;
-	let greetingPeriod = 'Hello';
-	let primaryModelName = '';
-
-	const quickActions = [
-		{
-			label: 'Write',
-			prompt: 'Help me write a clear first draft for this idea: '
-		},
-		{
-			label: 'Research',
-			prompt: 'Help me research this topic and organize the key takeaways: '
-		},
-		{
-			label: 'Code',
-			prompt: 'Help me design or debug this piece of code: '
-		},
-		{
-			label: 'Plan',
-			prompt: 'Help me break this into a concrete plan with next steps: '
-		}
-	];
+	let welcomeDescription = 'How can I help you today?';
 
 	$: if (selectedModels.length > 0) {
 		selectedModelIdx = models.length - 1;
 	}
 
-	$: models = selectedModels.map((id) => $_models.find((m) => m.id === id));
-	$: primaryModelName =
-		atSelectedModel?.name
-			? getModelDisplayName(atSelectedModel.name, atSelectedModel.id)
-			: models[selectedModelIdx]?.name
-				? getModelDisplayName(models[selectedModelIdx]?.name, models[selectedModelIdx]?.id)
-				: $WEBUI_NAME;
+	$: models = selectedModels.map((id) => $_models.find((m) => m.id === id)).filter(Boolean);
+	$: welcomeDescription = getModelShortDescription(
+		atSelectedModel ?? models[selectedModelIdx] ?? models[0]
+	);
 
 	onMount(() => {
 		const hour = new Date().getHours();
@@ -128,16 +106,10 @@
 				/>
 			{:else}
 				<div class="chat-shell-welcome" in:fade={{ duration: 150 }}>
-					<div class="chat-shell-welcome-kicker">
-						<span class="chat-shell-welcome-dot"></span>
-						{primaryModelName}
-					</div>
 					<h1 class="chat-shell-welcome-title">
 						{greetingPeriod}, {$user?.name?.split(' ')?.[0] ?? $WEBUI_NAME}
 					</h1>
-					<p class="chat-shell-welcome-subtitle">
-						Use one workspace to ask, write, research, and ship.
-					</p>
+					<p class="chat-shell-welcome-subtitle">{welcomeDescription}</p>
 				</div>
 			{/if}
 
@@ -178,18 +150,6 @@
 			in:fade={{ duration: 200, delay: 200 }}
 		>
 			<FolderPlaceholder folder={$selectedFolder} />
-		</div>
-	{:else}
-		<div class="chat-shell-quick-actions" in:fade={{ duration: 200, delay: 200 }}>
-			{#each quickActions as action}
-				<button
-					type="button"
-					class="chat-shell-quick-action"
-					on:click={() => onSelect({ type: 'prompt', data: action.prompt })}
-				>
-					{action.label}
-				</button>
-			{/each}
 		</div>
 	{/if}
 </div>

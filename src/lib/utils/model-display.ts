@@ -32,7 +32,7 @@ const getKnownOpenAIModelDescription = (model?: Partial<Model> & Record<string, 
 	}
 
 	if (modelId === 'gpt-5.4-pro') {
-		return 'Uses more compute to think harder for maximum performance on complex tasks.';
+		return 'Our most intelligent model for research level questions and extremely complex tasks.';
 	}
 
 	return '';

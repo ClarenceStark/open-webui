@@ -57,7 +57,7 @@
 	import { getChannels, createNewChannel } from '$lib/apis/channels';
 	import ChannelModal from './Sidebar/ChannelModal.svelte';
 	import ChannelItem from './Sidebar/ChannelItem.svelte';
-	import PencilSquare from '../icons/PencilSquare.svelte';
+	import PlusAlt from '../icons/PlusAlt.svelte';
 	import Search from '../icons/Search.svelte';
 	import SearchModal from './SearchModal.svelte';
 	import FolderModal from './Sidebar/Folders/FolderModal.svelte';
@@ -733,8 +733,10 @@
 							}}
 							aria-label={$i18n.t('New Chat')}
 						>
-							<div class=" self-center flex items-center justify-center size-9">
-								<PencilSquare className="size-4.5" />
+							<div class="self-center flex items-center justify-center size-9">
+								<div class="sidebar-new-chat-glyph flex items-center justify-center">
+									<PlusAlt className="size-4" strokeWidth="2" />
+								</div>
 							</div>
 						</a>
 					</Tooltip>
@@ -955,18 +957,20 @@
 					<div class="px-[0.4375rem] flex justify-center text-gray-800 dark:text-gray-200">
 						<a
 							id="sidebar-new-chat-button"
-							class="group grow flex items-center space-x-3 rounded-2xl px-2.5 py-2 hover:bg-gray-100 dark:hover:bg-gray-900 transition outline-none"
+							class="group grow grid grid-cols-[2rem_minmax(0,1fr)_auto] items-center gap-x-3 rounded-2xl px-2.5 py-2 hover:bg-gray-100 dark:hover:bg-gray-900 transition outline-none"
 							href="/"
 							draggable="false"
 							on:click={newChatHandler}
 							aria-label={$i18n.t('New Chat')}
 						>
-							<div class="self-center">
-								<PencilSquare className=" size-4.5" strokeWidth="2" />
+							<div class="sidebar-nav-icon">
+								<div class="sidebar-new-chat-glyph flex items-center justify-center">
+									<PlusAlt className="size-4" strokeWidth="2" />
+								</div>
 							</div>
 
-							<div class="flex flex-1 self-center translate-y-[0.5px]">
-								<div class=" self-center text-sm font-primary">{$i18n.t('New Chat')}</div>
+							<div class="min-w-0 translate-y-[0.5px]">
+								<div class="text-sm font-primary">{$i18n.t('New Chat')}</div>
 							</div>
 
 							<HotkeyHint name="newChat" className=" group-hover:visible invisible" />
@@ -976,19 +980,19 @@
 					<div class="px-[0.4375rem] flex justify-center text-gray-800 dark:text-gray-200">
 						<button
 							id="sidebar-search-button"
-							class="group grow flex items-center space-x-3 rounded-2xl px-2.5 py-2 hover:bg-gray-100 dark:hover:bg-gray-900 transition outline-none"
+							class="group grow grid grid-cols-[2rem_minmax(0,1fr)_auto] items-center gap-x-3 rounded-2xl px-2.5 py-2 hover:bg-gray-100 dark:hover:bg-gray-900 transition outline-none"
 							on:click={() => {
 								showSearch.set(true);
 							}}
 							draggable="false"
 							aria-label={$i18n.t('Search')}
 						>
-							<div class="self-center">
+							<div class="sidebar-nav-icon">
 								<Search strokeWidth="2" className="size-4.5" />
 							</div>
 
-							<div class="flex flex-1 self-center translate-y-[0.5px]">
-								<div class=" self-center text-sm font-primary">{$i18n.t('Search')}</div>
+							<div class="min-w-0 translate-y-[0.5px]">
+								<div class="text-sm font-primary">{$i18n.t('Search')}</div>
 							</div>
 							<HotkeyHint name="search" className=" group-hover:visible invisible" />
 						</button>
@@ -998,18 +1002,18 @@
 						<div class="px-[0.4375rem] flex justify-center text-gray-800 dark:text-gray-200">
 							<a
 								id="sidebar-notes-button"
-								class="grow flex items-center space-x-3 rounded-2xl px-2.5 py-2 hover:bg-gray-100 dark:hover:bg-gray-900 transition"
+								class="grow grid grid-cols-[2rem_minmax(0,1fr)] items-center gap-x-3 rounded-2xl px-2.5 py-2 hover:bg-gray-100 dark:hover:bg-gray-900 transition"
 								href="/notes"
 								on:click={itemClickHandler}
 								draggable="false"
 								aria-label={$i18n.t('Notes')}
 							>
-								<div class="self-center">
+								<div class="sidebar-nav-icon">
 									<Note className="size-4.5" strokeWidth="2" />
 								</div>
 
-								<div class="flex self-center translate-y-[0.5px]">
-									<div class=" self-center text-sm font-primary">{$i18n.t('Notes')}</div>
+								<div class="min-w-0 translate-y-[0.5px]">
+									<div class="text-sm font-primary">{$i18n.t('Notes')}</div>
 								</div>
 							</a>
 						</div>
@@ -1019,13 +1023,13 @@
 						<div class="px-[0.4375rem] flex justify-center text-gray-800 dark:text-gray-200">
 							<a
 								id="sidebar-workspace-button"
-								class="grow flex items-center space-x-3 rounded-2xl px-2.5 py-2 hover:bg-gray-100 dark:hover:bg-gray-900 transition"
+								class="grow grid grid-cols-[2rem_minmax(0,1fr)] items-center gap-x-3 rounded-2xl px-2.5 py-2 hover:bg-gray-100 dark:hover:bg-gray-900 transition"
 								href="/workspace"
 								on:click={itemClickHandler}
 								draggable="false"
 								aria-label={$i18n.t('Workspace')}
 							>
-								<div class="self-center">
+								<div class="sidebar-nav-icon">
 									<svg
 										xmlns="http://www.w3.org/2000/svg"
 										fill="none"
@@ -1042,8 +1046,8 @@
 									</svg>
 								</div>
 
-								<div class="flex self-center translate-y-[0.5px]">
-									<div class=" self-center text-sm font-primary">{$i18n.t('Workspace')}</div>
+								<div class="min-w-0 translate-y-[0.5px]">
+									<div class="text-sm font-primary">{$i18n.t('Workspace')}</div>
 								</div>
 							</a>
 						</div>
@@ -1409,27 +1413,27 @@
 							<div
 								class=" flex items-center rounded-2xl py-2 px-1.5 w-full hover:bg-gray-100/50 dark:hover:bg-gray-900/50 transition"
 							>
-								<div class=" self-center mr-3 relative">
+								<div class=" self-center mr-4 relative">
 									<img
 										src={`${WEBUI_API_BASE_URL}/users/${$user?.id}/profile/image`}
-										class=" size-7 object-cover rounded-full"
+										class=" size-10 object-cover rounded-full"
 										alt={$i18n.t('Open User Profile Menu')}
 										aria-label={$i18n.t('Open User Profile Menu')}
 									/>
 
 									{#if $config?.features?.enable_user_status}
-										<div class="absolute -bottom-0.5 -right-0.5">
-											<span class="relative flex size-2.5">
+										<div class="absolute -bottom-1 -right-1">
+											<span class="relative flex size-3.5">
 												<span
-													class="relative inline-flex size-2.5 rounded-full {true
+													class="relative inline-flex size-3.5 rounded-full {true
 														? 'bg-green-500'
-														: 'bg-gray-300 dark:bg-gray-700'} border-2 border-white dark:border-gray-900"
+														: 'bg-gray-300 dark:bg-gray-700'} border-[2.5px] border-white dark:border-gray-900"
 												></span>
 											</span>
 										</div>
 									{/if}
 								</div>
-								<div class=" self-center font-medium">{$user?.name}</div>
+								<div class=" self-center text-lg leading-none font-medium">{$user?.name}</div>
 							</div>
 						</UserMenu>
 					{/if}
