@@ -920,6 +920,10 @@ export const processDetails = (content) => {
 };
 
 const REASONING_DETAILS_REGEX = /<details\b(?=[^>]*\btype="reasoning")[^>]*>[\s\S]*?<\/details>/gi;
+const STRUCTURED_DETAILS_TAIL_REGEX =
+	/<details\b(?=[\s\S]*\btype="(?:reasoning|tool_calls|code_interpreter)")[\s\S]*$/i;
+const STRUCTURED_DETAILS_PARTIAL_TAG_TAIL_REGEX =
+	/<d(?:e(?:t(?:a(?:i(?:l(?:s?)?)?)?)?)?)?[\s\S]*$/i;
 
 const extractDurationFromReasoningDetail = (detail: string) => {
 	const durationAttr = detail.match(/\bduration="(\d+)"/i);
@@ -1013,6 +1017,27 @@ export const sanitizeAssistantDisplayContent = (content: string, done: boolean =
 		/<details\b(?=[^>]*\btype="tool_calls")[^>]*>[\s\S]*?<\/details>/gi,
 		''
 	);
+
+	// During smooth streaming, the visible content can end in the middle of one of the
+	// system-generated <details> blocks that carry reasoning/tool status metadata. If we
+	// render that tail as-is, users briefly see raw tag source like
+	// `<details type="reasoning" done="false"...` before the block is complete.
+	if (!done) {
+		sanitized = sanitized.replace(STRUCTURED_DETAILS_TAIL_REGEX, '');
+
+		// Handle the even earlier streaming state where the tag itself is still incomplete,
+		// for example `<det`, `<details type="reasoning"`, or `<details ... started_at="1`.
+		const partialDetailsIndex = sanitized.search(STRUCTURED_DETAILS_PARTIAL_TAG_TAIL_REGEX);
+		if (partialDetailsIndex !== -1) {
+			const trailingFragment = sanitized.slice(partialDetailsIndex);
+			if (
+				!trailingFragment.includes('>') ||
+				/\btype="(?:reasoning|tool_calls|code_interpreter)/i.test(trailingFragment)
+			) {
+				sanitized = sanitized.slice(0, partialDetailsIndex);
+			}
+		}
+	}
 
 	return sanitized;
 };

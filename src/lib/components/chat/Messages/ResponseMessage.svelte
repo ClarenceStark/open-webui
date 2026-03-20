@@ -132,6 +132,8 @@
 	let lastPlaybackAt = 0;
 	let playbackCarry = 0;
 	let playbackBufferStartedAt = 0;
+	let firstVisibleAssistantTextAt: number | null = null;
+	let firstVisibleAssistantTextAtMessageId: string | null = null;
 
 	const extractReasoningMetadata = (content: string) => {
 		if (typeof content !== 'string' || !content.includes('type="reasoning"')) {
@@ -187,6 +189,27 @@
 			DURATION: dayjs.duration(durationInSeconds, 'seconds').humanize()
 		});
 	};
+
+	const normalizeStartedAtSeconds = (value: number | string | null) => {
+		const numericValue =
+			typeof value === 'string' && value.trim() !== '' ? Number(value) : value;
+
+		if (!numericValue || !Number.isFinite(numericValue) || numericValue <= 0) {
+			return null;
+		}
+
+		return numericValue > 1_000_000_000_000
+			? Math.floor(numericValue / 1000)
+			: Math.floor(numericValue);
+	};
+
+	const getVisibleAssistantResponseText = (content: string) =>
+		removeAllDetails(content)
+			.replace(/<\/?summary[^>]*>/gi, ' ')
+			.replace(/<[^>]+>/g, ' ')
+			.replace(/&nbsp;/g, ' ')
+			.replace(/\s+/g, ' ')
+			.trim();
 
 	export let siblings;
 
@@ -277,6 +300,9 @@
 			: typeof latestSourceMessage?.pseudoDoneDurationSeconds === 'number'
 				? latestSourceMessage.pseudoDoneDurationSeconds
 				: null;
+	$: visibleAssistantResponseText =
+		typeof renderedContent === 'string' ? getVisibleAssistantResponseText(renderedContent) : '';
+	$: hasVisibleAssistantResponseText = visibleAssistantResponseText.length > 0;
 	$: effectiveReasoningDone = (targetDone ?? false) || (targetReasoningMetadata?.done ?? false);
 	$: hasVisibleReasoningDetails =
 		typeof renderedContent === 'string' &&
@@ -288,8 +314,34 @@
 		targetReasoningMetadata?.startedAt ??
 		message.timestamp ??
 		null;
+	$: if (firstVisibleAssistantTextAtMessageId !== message.id) {
+		firstVisibleAssistantTextAtMessageId = message.id;
+		firstVisibleAssistantTextAt = null;
+	}
+	$: if (
+		!effectiveReasoningDone &&
+		!hasVisibleReasoningDetails &&
+		hasVisibleAssistantResponseText &&
+		firstVisibleAssistantTextAt === null
+	) {
+		firstVisibleAssistantTextAt = Math.floor(Date.now() / 1000);
+	}
+	$: frozenFallbackThoughtDurationSeconds =
+		firstVisibleAssistantTextAt !== null
+			? (() => {
+					const startedAtSeconds = normalizeStartedAtSeconds(fallbackThinkingStartedAt);
+					return startedAtSeconds === null
+						? null
+						: Math.max(0, firstVisibleAssistantTextAt - startedAtSeconds);
+				})()
+			: null;
+	$: fallbackDisplayedDurationSeconds =
+		targetReasoningMetadata?.duration ??
+		pseudoDoneDurationSeconds ??
+		frozenFallbackThoughtDurationSeconds ??
+		null;
 	$: fallbackThoughtSummary = formatThoughtSummary(
-		targetReasoningMetadata?.duration ?? pseudoDoneDurationSeconds ?? null
+		fallbackDisplayedDurationSeconds
 	);
 	$: imageAltText =
 		typeof renderedContent === 'string' ? removeAllDetails(renderedContent).trim() : '';
@@ -1031,7 +1083,7 @@
 						>
 							{#if shouldShowFallbackThinking && !message.error}
 								<div class="mb-1">
-									{#if effectiveReasoningDone}
+									{#if effectiveReasoningDone || fallbackDisplayedDurationSeconds !== null}
 										<div
 											class="inline-flex min-h-12 items-center text-base font-normal tracking-[0.04em] text-gray-500 dark:text-gray-400"
 										>
