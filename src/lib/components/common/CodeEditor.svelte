@@ -78,6 +78,39 @@
 	export let lang = '';
 
 	let codeEditor: EditorView | null = null;
+	const codeSurfaceTheme = EditorView.theme(
+		{
+			'&': {
+				backgroundColor: '#2b2b28',
+				color: '#f8f8f2'
+			},
+			'& .cm-scroller': {
+				backgroundColor: '#2b2b28'
+			},
+			'& .cm-content': {
+				caretColor: '#f8f8f2'
+			},
+			'& .cm-gutters': {
+				backgroundColor: '#2b2b28',
+				color: '#a1a1aa',
+				border: 'none'
+			},
+			'& .cm-lineNumbers, & .cm-gutter, & .cm-gutterElement': {
+				backgroundColor: '#2b2b28',
+				color: '#a1a1aa'
+			},
+			'& .cm-activeLine, & .cm-activeLineGutter': {
+				backgroundColor: '#2b2b28'
+			},
+			'&.cm-focused .cm-selectionBackground, & .cm-selectionBackground, & .cm-content ::selection': {
+				backgroundColor: '#49483e'
+			},
+			'& .cm-cursor, & .cm-dropCursor': {
+				borderLeftColor: '#f8f8f2'
+			}
+		},
+		{ dark: true }
+	);
 
 	export const focus = () => {
 		codeEditor?.focus();
@@ -251,11 +284,9 @@ print("${endTag}")
 			parent: document.getElementById(`code-textarea-${id}`)
 		});
 
-		if (isDarkMode) {
-			codeEditor.dispatch({
-				effects: editorTheme.reconfigure(oneDark)
-			});
-		}
+		codeEditor.dispatch({
+			effects: editorTheme.reconfigure([oneDark, codeSurfaceTheme])
+		});
 
 		// listen to html class changes this should fire only when dark mode is toggled
 		const observer = new MutationObserver((mutations) => {
@@ -265,15 +296,9 @@ print("${endTag}")
 
 					if (_isDarkMode !== isDarkMode) {
 						isDarkMode = _isDarkMode;
-						if (_isDarkMode) {
-							codeEditor.dispatch({
-								effects: editorTheme.reconfigure(oneDark)
-							});
-						} else {
-							codeEditor.dispatch({
-								effects: editorTheme.reconfigure()
-							});
-						}
+						codeEditor.dispatch({
+							effects: editorTheme.reconfigure([oneDark, codeSurfaceTheme])
+						});
 					}
 				}
 			});
@@ -318,4 +343,17 @@ print("${endTag}")
 	});
 </script>
 
-<div id="code-textarea-{id}" class="h-full w-full text-sm" />
+<div id="code-textarea-{id}" class="code-editor-host h-full w-full text-sm" />
+
+<style>
+	.code-editor-host :global(.cm-editor),
+	.code-editor-host :global(.cm-scroller),
+	.code-editor-host :global(.cm-gutters),
+	.code-editor-host :global(.cm-lineNumbers),
+	.code-editor-host :global(.cm-gutter),
+	.code-editor-host :global(.cm-gutterElement),
+	.code-editor-host :global(.cm-activeLine),
+	.code-editor-host :global(.cm-activeLineGutter) {
+		background-color: #2b2b28 !important;
+	}
+</style>

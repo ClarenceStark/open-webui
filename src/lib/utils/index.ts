@@ -437,10 +437,11 @@ export const copyToClipboard = async (text, html = null, formatted = false) => {
 			<div>
 				<style>
 					pre {
-						background-color: #f6f8fa;
+						background-color: #2b2b28;
 						border-radius: 6px;
 						padding: 16px;
 						overflow: auto;
+						color: #f8f8f2;
 					}
 					code {
 						font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
