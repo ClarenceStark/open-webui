@@ -10,11 +10,7 @@
 
 	import ChevronUp from '../icons/ChevronUp.svelte';
 	import ChevronDown from '../icons/ChevronDown.svelte';
-	import Spinner from './Spinner.svelte';
 	import Markdown from '../chat/Messages/Markdown.svelte';
-	import WrenchSolid from '../icons/WrenchSolid.svelte';
-	import CheckCircle from '../icons/CheckCircle.svelte';
-	import Image from './Image.svelte';
 	import FullHeightIframe from './FullHeightIframe.svelte';
 	import { settings } from '$lib/stores';
 
@@ -120,21 +116,6 @@
 					? 'shimmer'
 					: ''}"
 			>
-				<!-- Status icon -->
-				{#if isExecuting}
-					<div>
-						<Spinner className="size-4" />
-					</div>
-				{:else if isDone}
-					<div class="text-emerald-500 dark:text-emerald-400">
-						<CheckCircle className="size-4" strokeWidth="2" />
-					</div>
-				{:else}
-					<div class="text-gray-400 dark:text-gray-500">
-						<WrenchSolid className="size-3.5" />
-					</div>
-				{/if}
-
 				<!-- Label -->
 				<div class="flex-1 line-clamp-1">
 					<!-- Short label (below md) -->
@@ -245,23 +226,6 @@
 					{/if}
 				</div>
 			</div>
-		{/if}
-	{/if}
-
-	<!-- Files display (images etc.) when done -->
-	{#if isDone}
-		{#if typeof files === 'object'}
-			{#each files ?? [] as file, idx}
-				{#if typeof file === 'string'}
-					{#if file.startsWith('data:image/')}
-						<Image id={`${componentId}-tool-call-result-${idx}`} src={file} alt="Image" />
-					{/if}
-				{:else if typeof file === 'object'}
-					{#if (file.type === 'image' || (file?.content_type ?? '').startsWith('image/')) && file.url}
-						<Image id={`${componentId}-tool-call-result-${idx}`} src={file.url} alt="Image" />
-					{/if}
-				{/if}
-			{/each}
 		{/if}
 	{/if}
 </div>

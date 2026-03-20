@@ -960,6 +960,7 @@ async def get_terminal_tools(
     terminal_id: str,
     user: UserModel,
     extra_params: dict,
+    metadata: Optional[dict] = None,
 ) -> dict[str, dict]:
     """Resolve tools for a terminal server identified by terminal_id.
 
@@ -992,6 +993,17 @@ async def get_terminal_tools(
     if not specs:
         return {}
 
+    metadata = metadata or {}
+    attached_files = metadata.get("files") or []
+    has_attached_image = any(
+        isinstance(file_item, dict)
+        and (
+            file_item.get("type") == "image"
+            or str(file_item.get("content_type") or "").startswith("image/")
+        )
+        for file_item in attached_files
+    )
+
     # Build auth headers
     auth_type = connection.get("auth_type", "bearer")
     cookies = {}
@@ -1012,8 +1024,27 @@ async def get_terminal_tools(
     terminal_cwd = await get_terminal_cwd(connection.get("url", ""), headers, cookies)
 
     tools_dict = {}
+    allowed_terminal_tools = {
+        "exec_command",
+        "run_command",
+        "write_stdin",
+        "list_files",
+        "read_file",
+        "apply_patch",
+        "view_image",
+        "download_artifact",
+    }
     for spec in specs:
         function_name = spec["name"]
+
+        if function_name not in allowed_terminal_tools:
+            continue
+
+        if function_name == "view_image" and has_attached_image:
+            continue
+
+        if function_name == "list_files" and has_attached_image:
+            continue
 
         # Inject CWD into command execution tool descriptions
         tool_spec = clean_openai_tool_schema(spec)
@@ -1021,6 +1052,19 @@ async def get_terminal_tools(
             tool_spec["description"] = (
                 tool_spec.get("description", "")
                 + f"\n\nThe current working directory is: {terminal_cwd}"
+                + "\nIf a command fails because a Python package is missing, you may proactively run python3 -m pip install <package> in the sandbox and retry."
+                + "\nIf your command prints the exact output file path on its own line, the system may automatically upload that generated file back into chat for the user."
+            )
+        if function_name == "view_image":
+            tool_spec["description"] = (
+                tool_spec.get("description", "")
+                + "\n\nRead-only preview tool. This does NOT edit or annotate the image."
+                + "\nWhen the user asks to circle, mark, label, or modify an image, use exec_command to create a new output image file, then use download_artifact to return it."
+            )
+        if function_name == "download_artifact":
+            tool_spec["description"] = (
+                tool_spec.get("description", "")
+                + "\n\nUse this after generating a new file in the sandbox when you want the user to receive that file in chat."
             )
 
         def make_tool_function(fn_name, srv_data, hdrs, cks):
@@ -1263,10 +1307,6 @@ async def execute_tool_server(
         for key, value in path_params.items():
             final_url = final_url.replace(f"{{{key}}}", str(value))
 
-        if query_params:
-            query_string = "&".join(f"{k}={v}" for k, v in query_params.items())
-            final_url = f"{final_url}?{query_string}"
-
         if operation.get("requestBody", {}).get("content"):
             if params:
                 body_params = params
@@ -1280,6 +1320,7 @@ async def execute_tool_server(
                 async with request_method(
                     final_url,
                     json=body_params,
+                    params=query_params or None,
                     headers=headers,
                     cookies=cookies,
                     ssl=AIOHTTP_CLIENT_SESSION_TOOL_SERVER_SSL,
@@ -1299,6 +1340,7 @@ async def execute_tool_server(
             else:
                 async with request_method(
                     final_url,
+                    params=query_params or None,
                     headers=headers,
                     cookies=cookies,
                     ssl=AIOHTTP_CLIENT_SESSION_TOOL_SERVER_SSL,

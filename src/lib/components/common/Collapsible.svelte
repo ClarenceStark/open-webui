@@ -35,6 +35,7 @@
 	import ChevronUp from '../icons/ChevronUp.svelte';
 	import ChevronDown from '../icons/ChevronDown.svelte';
 	import Spinner from './Spinner.svelte';
+	import ThinkingIndicator from '../chat/Messages/ThinkingIndicator.svelte';
 
 	export let open = false;
 
@@ -54,7 +55,15 @@
 
 	export let onChange: Function = () => {};
 
+	let isPending = false;
+	let isReasoning = false;
+	let showLegacySpinner = false;
+
 	$: onChange(open);
+
+	$: isPending = attributes?.done && attributes?.done !== 'true';
+	$: isReasoning = attributes?.type === 'reasoning';
+	$: showLegacySpinner = isPending && !isReasoning;
 
 	const collapsibleId = uuidv4();
 </script>
@@ -71,39 +80,38 @@
 				}
 			}}
 		>
-			<div
-				class=" w-full flex items-center justify-between gap-2 {attributes?.done &&
-				attributes?.done !== 'true'
-					? 'shimmer'
-					: ''}
-			"
-			>
-				{#if attributes?.done && attributes?.done !== 'true'}
-					<div>
-						<Spinner className="size-4" />
-					</div>
-				{/if}
+				<div
+					class=" w-full flex items-center justify-between gap-2 {showLegacySpinner ? 'shimmer' : ''}
+				"
+				>
+					{#if showLegacySpinner}
+						<div>
+							<Spinner className="size-4" />
+						</div>
+					{/if}
 
-				<div class="">
-					{#if attributes?.type === 'reasoning'}
-						{#if attributes?.done === 'true' && attributes?.duration}
-							{#if attributes.duration < 1}
-								{$i18n.t('Thought for less than a second')}
-							{:else if attributes.duration < 60}
-								{$i18n.t('Thought for {{DURATION}} seconds', {
-									DURATION: attributes.duration
-								})}
+					<div class="">
+						{#if isReasoning}
+							{#if attributes?.done !== 'true'}
+								<ThinkingIndicator startedAt={attributes?.started_at ?? null} />
+							{:else if attributes?.duration}
+								{#if attributes.duration < 1}
+									{$i18n.t('Thought for less than a second')}
+								{:else if attributes.duration < 60}
+									{$i18n.t('Thought for {{DURATION}} seconds', {
+										DURATION: attributes.duration
+									})}
+								{:else}
+									{$i18n.t('Thought for {{DURATION}}', {
+										DURATION: dayjs.duration(attributes.duration, 'seconds').humanize()
+									})}
+								{/if}
 							{:else}
-								{$i18n.t('Thought for {{DURATION}}', {
-									DURATION: dayjs.duration(attributes.duration, 'seconds').humanize()
-								})}
+								{$i18n.t('Thinking...')}
 							{/if}
-						{:else}
-							{$i18n.t('Thinking...')}
-						{/if}
-					{:else if attributes?.type === 'code_interpreter'}
-						{#if attributes?.done === 'true'}
-							{$i18n.t('Analyzed')}
+						{:else if attributes?.type === 'code_interpreter'}
+							{#if attributes?.done === 'true'}
+								{$i18n.t('Analyzed')}
 						{:else}
 							{$i18n.t('Analyzing...')}
 						{/if}

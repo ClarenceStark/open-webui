@@ -95,12 +95,6 @@
 		showControls.set(true);
 	}
 
-	// Auto-open Files tab when a terminal is selected
-	$: if ($selectedTerminalId) {
-		activeTab = 'files';
-		showControls.set(true);
-	}
-
 	// Attach a terminal file to the chat input
 	const handleTerminalAttach = async (blob: Blob, name: string, contentType: string) => {
 		const tempItemId = uuidv4();

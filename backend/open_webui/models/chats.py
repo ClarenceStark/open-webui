@@ -34,6 +34,79 @@ from sqlalchemy.sql.expression import bindparam
 log = logging.getLogger(__name__)
 
 
+def _artifact_files_from_status_history(status_history):
+    files = []
+    for item in status_history or []:
+        if (
+            isinstance(item, dict)
+            and item.get("action") == "artifact_uploaded"
+            and isinstance(item.get("files"), list)
+        ):
+            files.extend(item.get("files") or [])
+    return files
+
+
+def _normalize_assistant_artifact_message(message: dict) -> dict:
+    if not isinstance(message, dict) or message.get("role") != "assistant":
+        return message
+
+    normalized = {**message}
+    files = list(normalized.get("files") or [])
+    if not files:
+        files = _artifact_files_from_status_history(normalized.get("statusHistory"))
+        if files:
+            normalized["files"] = files
+
+    content = normalized.get("content")
+    if (
+        files
+        and isinstance(content, str)
+        and 'name="download_artifact"' in content
+        and "<summary>Executing...</summary>" in content
+    ):
+        normalized["content"] = (
+            content.replace('done="false"', 'done="true"')
+            .replace("<summary>Executing...</summary>", "<summary>Tool Executed</summary>")
+        )
+
+    output = normalized.get("output")
+    if files and isinstance(output, list):
+        has_function_call_output = any(
+            isinstance(item, dict) and item.get("type") == "function_call_output"
+            for item in output
+        )
+        if not has_function_call_output:
+            download_call = next(
+                (
+                    item
+                    for item in output
+                    if isinstance(item, dict)
+                    and item.get("type") == "function_call"
+                    and item.get("name") == "download_artifact"
+                ),
+                None,
+            )
+            if download_call:
+                normalized["output"] = [
+                    *output,
+                    {
+                        "id": f"fco_{download_call.get('call_id', 'download_artifact')}",
+                        "type": "function_call_output",
+                        "call_id": download_call.get("call_id", ""),
+                        "status": "completed",
+                        "output": [
+                            {
+                                "type": "input_text",
+                                "text": "Generated file",
+                            }
+                        ],
+                        "files": files,
+                    },
+                ]
+
+    return normalized
+
+
 class Chat(Base):
     __tablename__ = "chat"
 
@@ -402,6 +475,7 @@ class ChatTable:
         try:
             with get_db_context(db) as db:
                 chat_item = db.get(Chat, id)
+                user_id = chat_item.user_id if chat_item else None
                 chat_item.chat = self._clean_null_bytes(chat)
                 chat_item.title = (
                     self._clean_null_bytes(chat["title"])
@@ -413,6 +487,27 @@ class ChatTable:
 
                 db.commit()
                 db.refresh(chat_item)
+
+                try:
+                    history = chat.get("history", {}) or {}
+                    messages = history.get("messages", {}) or {}
+                    for message_id, message in messages.items():
+                        if isinstance(message, dict) and message.get("role") and user_id:
+                            normalized_message = _normalize_assistant_artifact_message(
+                                message
+                            )
+                            history["messages"][message_id] = normalized_message
+                            ChatMessages.upsert_message(
+                                message_id=message_id,
+                                chat_id=id,
+                                user_id=user_id,
+                                data=normalized_message,
+                                db=db,
+                            )
+                except Exception as e:
+                    log.warning(
+                        f"Failed to sync updated chat messages to chat_message table: {e}"
+                    )
 
                 return ChatModel.model_validate(chat_item)
         except Exception:
@@ -489,6 +584,8 @@ class ChatTable:
         if isinstance(message.get("content"), str):
             message["content"] = sanitize_text_for_db(message["content"])
 
+        message = _normalize_assistant_artifact_message(message)
+
         user_id = chat.user_id
         chat = chat.chat
         history = chat.get("history", {})
@@ -540,11 +637,11 @@ class ChatTable:
         self, id: str, message_id: str, files: list[dict]
     ) -> list[dict]:
         with get_db_context() as db:
-            chat = self.get_chat_by_id(id, db=db)
-            if chat is None:
+            chat_model = self.get_chat_by_id(id, db=db)
+            if chat_model is None:
                 return None
 
-            chat = chat.chat
+            chat = chat_model.chat
             history = chat.get("history", {})
 
             message_files = []
@@ -556,6 +653,19 @@ class ChatTable:
 
             chat["history"] = history
             self.update_chat_by_id(id, chat, db=db)
+
+            if message_id in history.get("messages", {}):
+                try:
+                    ChatMessages.upsert_message(
+                        message_id=message_id,
+                        chat_id=id,
+                        user_id=chat_model.user_id,
+                        data=history["messages"][message_id],
+                        db=db,
+                    )
+                except Exception as e:
+                    log.warning(f"Failed to sync chat_message files: {e}")
+
             return message_files
 
     def insert_shared_chat_by_chat_id(

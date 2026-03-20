@@ -903,6 +903,63 @@ def convert_to_responses_payload(payload: dict) -> dict:
             input_items.extend(stored_output)
             continue
 
+        if role == "assistant" and isinstance(msg.get("tool_calls"), list):
+            tool_calls = msg.get("tool_calls") or []
+            has_text_content = False
+
+            if isinstance(content, str):
+                has_text_content = bool(content)
+            elif isinstance(content, list):
+                has_text_content = any(
+                    part.get("type") == "text" and part.get("text", "")
+                    for part in content
+                    if isinstance(part, dict)
+                )
+
+            if has_text_content:
+                if isinstance(content, str):
+                    content_parts = [{"type": "output_text", "text": content}]
+                else:
+                    content_parts = []
+                    for part in content:
+                        if part.get("type") == "text":
+                            content_parts.append(
+                                {
+                                    "type": "output_text",
+                                    "text": part.get("text", ""),
+                                }
+                            )
+
+                input_items.append(
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": content_parts,
+                    }
+                )
+
+            for tool_call in tool_calls:
+                function_data = tool_call.get("function", {}) or {}
+                input_items.append(
+                    {
+                        "type": "function_call",
+                        "call_id": tool_call.get("id", ""),
+                        "name": function_data.get("name", ""),
+                        "arguments": function_data.get("arguments", "{}"),
+                    }
+                )
+            continue
+
+        if role == "tool":
+            input_items.append(
+                {
+                    "type": "function_call_output",
+                    "call_id": msg.get("tool_call_id", ""),
+                    "output": content if isinstance(content, str) else str(content),
+                }
+            )
+            continue
+
         if role == "system":
             if isinstance(content, str):
                 system_content = content

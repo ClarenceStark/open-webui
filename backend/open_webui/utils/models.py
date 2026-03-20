@@ -37,6 +37,40 @@ logging.basicConfig(stream=sys.stdout, level=GLOBAL_LOG_LEVEL)
 log = logging.getLogger(__name__)
 
 
+def _matches_model_alias(model_id: str | None, canonical_id: str) -> bool:
+    if not model_id:
+        return False
+
+    if model_id == canonical_id:
+        return True
+
+    return model_id.endswith(f".{canonical_id}") or model_id.endswith(
+        f"/{canonical_id}"
+    ) or model_id.endswith(f":{canonical_id}")
+
+
+def apply_implicit_model_param_defaults(models: list[dict]) -> None:
+    """
+    Inject lightweight defaults for base models that are not represented as
+    custom model records in the database.
+
+    These defaults should be narrow, explicit, and must not overwrite any
+    per-model params that already exist.
+    """
+    for model in models:
+        if not _matches_model_alias(model.get("id"), "gpt-5.4"):
+            continue
+
+        info = model.setdefault("info", {})
+        params = info.get("params")
+        if not isinstance(params, dict):
+            params = {}
+            info["params"] = params
+
+        if params.get("reasoning_effort") is None:
+            params["reasoning_effort"] = "high"
+
+
 async def fetch_ollama_models(request: Request, user: UserModel = None):
     raw_ollama_models = await ollama.get_all_models(request, user=user)
     return [
@@ -331,6 +365,8 @@ async def get_all_models(request, refresh: bool = False, user: UserModel = None)
                     meta["capabilities"] = {**value, **existing}
                 elif meta.get(key) is None:
                     meta[key] = copy.deepcopy(value)
+
+    apply_implicit_model_param_defaults(models)
 
     # Batch-fetch all function valves in one query to avoid N+1 DB hits
     # inside get_action_priority (previously called per action × per model).

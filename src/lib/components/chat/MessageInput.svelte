@@ -523,16 +523,21 @@
 		$config?.features?.enable_image_generation &&
 		($_user.role === 'admin' || $_user?.permissions?.features?.image_generation);
 
+	const hasFallbackTerminal = () => {
+		return ($terminalServers ?? []).some((terminal) => terminal?.id || terminal?.url);
+	};
+
 	let showCodeInterpreterButton = false;
 	$: showCodeInterpreterButton =
 		!$selectedTerminalId &&
+		!hasFallbackTerminal() &&
 		(atSelectedModel?.id ? [atSelectedModel.id] : selectedModels).length ===
 			codeInterpreterCapableModels.length &&
 		$config?.features?.enable_code_interpreter &&
 		($_user.role === 'admin' || $_user?.permissions?.features?.code_interpreter);
 
 	// Disable code interpreter when terminal is active (mutually exclusive)
-	$: if ($selectedTerminalId && codeInterpreterEnabled) {
+	$: if (($selectedTerminalId || hasFallbackTerminal()) && codeInterpreterEnabled) {
 		codeInterpreterEnabled = false;
 	}
 

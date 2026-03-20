@@ -7,9 +7,11 @@ import select
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import uuid
 import time
+import logging
 
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -38,13 +40,51 @@ TMP_ROOT = Path(
 TMP_ROOT.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title=APP_TITLE, version="0.1.0")
+log = logging.getLogger(__name__)
+
+def resolve_sandbox_python() -> tuple[Path, Path]:
+    prefix_root = Path(sys.prefix).resolve()
+    candidates = [
+        prefix_root / "bin" / "python3",
+        prefix_root / "bin" / "python",
+        Path(sys.executable).resolve(),
+    ]
+    executable = next((candidate for candidate in candidates if candidate.exists()), candidates[-1])
+    venv_root = prefix_root if (prefix_root / "pyvenv.cfg").exists() else executable.parent.parent
+    return executable, venv_root
+
+
+SANDBOX_PYTHON_EXECUTABLE, SANDBOX_VENV_ROOT = resolve_sandbox_python()
+SANDBOX_PYTHON_BIN_DIR = SANDBOX_PYTHON_EXECUTABLE.parent
+DEFAULT_SANDBOX_PYTHON_PACKAGES = {
+    "pillow": "PIL",
+    "python-docx": "docx",
+    "matplotlib": "matplotlib",
+    "pandas": "pandas",
+    "pypandoc": "pypandoc",
+}
+SANDBOX_AUTO_INSTALL_PYTHON_PACKAGES = (
+    os.environ.get("SANDBOX_AUTO_INSTALL_PYTHON_PACKAGES", "true").strip().lower()
+    not in {"0", "false", "no", "off"}
+)
+PYTHON_BOOTSTRAP_STATUS = {
+    "checked": False,
+    "installed": [],
+    "missing": [],
+    "failed": [],
+}
+PYTHON_BOOTSTRAP_LOCK = asyncio.Lock()
 
 
 @dataclass
 class SessionState:
     id: str
     process: subprocess.Popen
-    master_fd: int
+    tty: bool
+    master_fd: Optional[int]
+    stdin_fd: Optional[int]
+    stdout_fd: Optional[int]
+    stderr_fd: Optional[int]
     user_id: str
     cwd: str
     command: str
@@ -182,55 +222,215 @@ def real_to_virtual_path(path: Path) -> str:
 
 
 def shell_command_argv(cmd: str) -> list[str]:
-    shell_argv = [DEFAULT_SHELL, "-lc", cmd]
+    export_lines = [
+        f"export PATH={shlex.quote(str(SANDBOX_PYTHON_BIN_DIR))}:$PATH",
+    ]
+    if (SANDBOX_VENV_ROOT / "pyvenv.cfg").exists():
+        export_lines.append(f"export VIRTUAL_ENV={shlex.quote(str(SANDBOX_VENV_ROOT))}")
+
+    wrapped_cmd = "\n".join([*export_lines, cmd])
+    shell_argv = [DEFAULT_SHELL, "-lc", wrapped_cmd]
     if SANDBOX_RUNNER:
         return [*shlex.split(SANDBOX_RUNNER), *shell_argv]
     return shell_argv
 
 
-def read_available(master_fd: int) -> bytes:
+def virtual_to_real_in_text(text: str) -> str:
+    if not text:
+        return text
+
+    workspace_root = str(WORKSPACE_ROOT)
+    tmp_root = str(TMP_ROOT)
+
+    converted = text.replace("/workspace/", f"{workspace_root.rstrip('/')}/")
+    converted = converted.replace("/tmp/", f"{tmp_root.rstrip('/')}/")
+
+    if "/workspace" in converted:
+        converted = converted.replace("/workspace", workspace_root)
+    if "/tmp" in converted:
+        converted = converted.replace("/tmp", tmp_root)
+
+    return converted
+
+
+def real_to_virtual_in_text(text: str) -> str:
+    if not text:
+        return text
+
+    workspace_root = str(WORKSPACE_ROOT)
+    tmp_root = str(TMP_ROOT)
+
+    converted = text.replace(f"{workspace_root.rstrip('/')}/", "/workspace/")
+    converted = converted.replace(f"{tmp_root.rstrip('/')}/", "/tmp/")
+
+    if workspace_root in converted:
+        converted = converted.replace(workspace_root, "/workspace")
+    if tmp_root in converted:
+        converted = converted.replace(tmp_root, "/tmp")
+
+    return converted
+
+
+def enrich_env_with_current_python(full_env: dict[str, str]) -> dict[str, str]:
+    existing_path = full_env.get("PATH", "")
+    full_env["PATH"] = (
+        f"{SANDBOX_PYTHON_BIN_DIR}{os.pathsep}{existing_path}"
+        if existing_path
+        else str(SANDBOX_PYTHON_BIN_DIR)
+    )
+
+    if (SANDBOX_VENV_ROOT / "pyvenv.cfg").exists():
+        full_env.setdefault("VIRTUAL_ENV", str(SANDBOX_VENV_ROOT))
+
+    return full_env
+
+
+async def probe_missing_python_packages() -> list[str]:
+    missing = []
+    for package_name, import_name in DEFAULT_SANDBOX_PYTHON_PACKAGES.items():
+        process = await asyncio.create_subprocess_exec(
+            str(SANDBOX_PYTHON_EXECUTABLE),
+            "-c",
+            f"import {import_name}",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=enrich_env_with_current_python(os.environ.copy()),
+        )
+        await process.communicate()
+        if process.returncode != 0:
+            missing.append(package_name)
+    return missing
+
+
+async def ensure_default_python_packages() -> dict[str, Any]:
+    async with PYTHON_BOOTSTRAP_LOCK:
+        if PYTHON_BOOTSTRAP_STATUS["checked"]:
+            return dict(PYTHON_BOOTSTRAP_STATUS)
+
+        missing = await probe_missing_python_packages()
+        PYTHON_BOOTSTRAP_STATUS["missing"] = list(missing)
+
+        if missing and SANDBOX_AUTO_INSTALL_PYTHON_PACKAGES:
+            log.info("Installing sandbox Python packages: %s", ", ".join(missing))
+            install_process = await asyncio.create_subprocess_exec(
+                str(SANDBOX_PYTHON_EXECUTABLE),
+                "-m",
+                "pip",
+                "install",
+                *missing,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=enrich_env_with_current_python(os.environ.copy()),
+            )
+            stdout, stderr = await install_process.communicate()
+            if install_process.returncode == 0:
+                PYTHON_BOOTSTRAP_STATUS["installed"] = list(missing)
+                PYTHON_BOOTSTRAP_STATUS["missing"] = []
+            else:
+                PYTHON_BOOTSTRAP_STATUS["failed"] = list(missing)
+                log.warning(
+                    "Failed to install sandbox Python packages %s: %s %s",
+                    ", ".join(missing),
+                    stdout.decode("utf-8", "replace"),
+                    stderr.decode("utf-8", "replace"),
+                )
+        elif missing:
+            PYTHON_BOOTSTRAP_STATUS["failed"] = list(missing)
+
+        PYTHON_BOOTSTRAP_STATUS["checked"] = True
+        return dict(PYTHON_BOOTSTRAP_STATUS)
+
+
+def read_available_from_fds(*fds: Optional[int]) -> bytes:
+    valid_fds = [fd for fd in fds if fd is not None]
+    if not valid_fds:
+        return b""
+
     chunks: list[bytes] = []
     while True:
-        ready, _, _ = select.select([master_fd], [], [], 0)
+        ready, _, _ = select.select(valid_fds, [], [], 0)
         if not ready:
             break
 
-        try:
-            chunk = os.read(master_fd, 65536)
-        except BlockingIOError:
-            break
-        except OSError:
-            break
+        had_data = False
+        for fd in ready:
+            try:
+                chunk = os.read(fd, 65536)
+            except BlockingIOError:
+                continue
+            except OSError:
+                continue
 
-        if not chunk:
+            if not chunk:
+                continue
+
+            had_data = True
+            chunks.append(chunk)
+
+        if not had_data:
             break
-        chunks.append(chunk)
 
     return b"".join(chunks)
 
 
-def spawn_session(command: str, cwd: Path, env: Optional[dict[str, str]], user_id: str) -> SessionState:
-    master_fd, slave_fd = pty.openpty()
+def spawn_session(
+    command: str,
+    cwd: Path,
+    env: Optional[dict[str, str]],
+    user_id: str,
+    tty: bool,
+) -> SessionState:
+    command = virtual_to_real_in_text(command)
+
     full_env = os.environ.copy()
     full_env.update(env or {})
+    full_env = enrich_env_with_current_python(full_env)
 
-    process = subprocess.Popen(
-        shell_command_argv(command),
-        stdin=slave_fd,
-        stdout=slave_fd,
-        stderr=slave_fd,
-        cwd=str(cwd),
-        env=full_env,
-        start_new_session=True,
-    )
-    os.close(slave_fd)
-    os.set_blocking(master_fd, False)
+    master_fd: Optional[int] = None
+    stdin_fd: Optional[int] = None
+    stdout_fd: Optional[int] = None
+    stderr_fd: Optional[int] = None
+
+    if tty:
+        master_fd, slave_fd = pty.openpty()
+        process = subprocess.Popen(
+            shell_command_argv(command),
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            cwd=str(cwd),
+            env=full_env,
+            start_new_session=True,
+        )
+        os.close(slave_fd)
+        os.set_blocking(master_fd, False)
+    else:
+        process = subprocess.Popen(
+            shell_command_argv(command),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=str(cwd),
+            env=full_env,
+            start_new_session=True,
+        )
+        stdin_fd = process.stdin.fileno() if process.stdin else None
+        stdout_fd = process.stdout.fileno() if process.stdout else None
+        stderr_fd = process.stderr.fileno() if process.stderr else None
+
+        for fd in (stdout_fd, stderr_fd):
+            if fd is not None:
+                os.set_blocking(fd, False)
 
     session_id = str(uuid.uuid4())
     return SessionState(
         id=session_id,
         process=process,
+        tty=tty,
         master_fd=master_fd,
+        stdin_fd=stdin_fd,
+        stdout_fd=stdout_fd,
+        stderr_fd=stderr_fd,
         user_id=user_id,
         cwd=real_to_virtual_path(cwd),
         command=command,
@@ -252,14 +452,35 @@ async def terminate_session_later(session_id: str, timeout_seconds: int):
         pass
 
 
-async def collect_session_output(session: SessionState, yield_time_ms: int) -> tuple[str, bool, Optional[int]]:
+def build_session_message(running: bool, exit_code: Optional[int], pending: str, success: str) -> str:
+    if running:
+        return pending
+    if exit_code in (None, 0):
+        return success
+    return "Command failed"
+
+
+async def collect_session_output(
+    session: SessionState, yield_time_ms: int
+) -> tuple[str, str, bool, Optional[int]]:
     if yield_time_ms > 0:
         await asyncio.sleep(yield_time_ms / 1000)
 
-    output = await asyncio.to_thread(read_available, session.master_fd)
+    if session.tty:
+        output = await asyncio.to_thread(read_available_from_fds, session.master_fd)
+        stdout = real_to_virtual_in_text(output.decode("utf-8", "replace"))
+        stderr = ""
+    else:
+        stdout_bytes, stderr_bytes = await asyncio.gather(
+            asyncio.to_thread(read_available_from_fds, session.stdout_fd),
+            asyncio.to_thread(read_available_from_fds, session.stderr_fd),
+        )
+        stdout = real_to_virtual_in_text(stdout_bytes.decode("utf-8", "replace"))
+        stderr = real_to_virtual_in_text(stderr_bytes.decode("utf-8", "replace"))
+
     running = session.process.poll() is None
     exit_code = None if running else session.process.returncode
-    return output.decode("utf-8", "replace"), running, exit_code
+    return stdout, stderr, running, exit_code
 
 
 def artifact_descriptor(path: str, content_type: Optional[str] = None) -> dict[str, Any]:
@@ -283,7 +504,22 @@ async def api_config():
             "tmp_root": str(TMP_ROOT),
             "runner_configured": bool(SANDBOX_RUNNER),
         },
+        "python": {
+            "executable": str(SANDBOX_PYTHON_EXECUTABLE),
+            "venv_root": (
+                str(SANDBOX_VENV_ROOT)
+                if (SANDBOX_VENV_ROOT / "pyvenv.cfg").exists()
+                else None
+            ),
+            "auto_install_enabled": SANDBOX_AUTO_INSTALL_PYTHON_PACKAGES,
+            "bootstrap": PYTHON_BOOTSTRAP_STATUS,
+        },
     }
+
+
+@app.on_event("startup")
+async def bootstrap_python_environment():
+    await ensure_default_python_packages()
 
 
 @app.post("/api/terminals", response_model=TerminalCreateResponse, dependencies=[Depends(require_auth)])
@@ -292,7 +528,13 @@ async def create_terminal(request: Request):
     cwd_real, _ = resolve_path(get_user_cwd(user_id), user_id)
     cwd_real = cwd_real or WORKSPACE_ROOT
 
-    session = spawn_session(f"exec {shlex.quote(DEFAULT_SHELL)} -l", cwd_real, None, user_id)
+    session = spawn_session(
+        f"exec {shlex.quote(DEFAULT_SHELL)} -l",
+        cwd_real,
+        None,
+        user_id,
+        tty=True,
+    )
     SESSIONS[session.id] = session
     return {"id": session.id}
 
@@ -319,7 +561,7 @@ async def terminal_socket(websocket: WebSocket, session_id: str):
 
     async def pump_output():
         while True:
-            chunk = await asyncio.to_thread(read_available, session.master_fd)
+            chunk = await asyncio.to_thread(read_available_from_fds, session.master_fd)
             if chunk:
                 await websocket.send_bytes(chunk)
             elif session.process.poll() is not None:
@@ -345,9 +587,11 @@ async def terminal_socket(websocket: WebSocket, session_id: str):
                     continue
                 if payload and payload.get("type") == "ping":
                     continue
-                os.write(session.master_fd, text.encode("utf-8"))
+                if session.master_fd is not None:
+                    os.write(session.master_fd, text.encode("utf-8"))
             elif data:
-                os.write(session.master_fd, data)
+                if session.master_fd is not None:
+                    os.write(session.master_fd, data)
 
     try:
         await asyncio.gather(pump_output(), receive_input())
@@ -525,21 +769,27 @@ async def exec_command(request: Request, body: ExecCommandRequest):
     cwd_real, cwd_virtual = resolve_path(body.workdir or get_user_cwd(user_id), user_id)
     cwd_real = cwd_real or WORKSPACE_ROOT
 
-    session = spawn_session(body.cmd, cwd_real, body.env, user_id)
+    session = spawn_session(body.cmd, cwd_real, body.env, user_id, tty=body.tty)
     session.cwd = cwd_virtual
     SESSIONS[session.id] = session
     session.timeout_task = asyncio.create_task(
         terminate_session_later(session.id, body.timeout_seconds)
     )
 
-    output, running, exit_code = await collect_session_output(
+    stdout, stderr, running, exit_code = await collect_session_output(
         session, body.yield_time_ms
     )
     return {
         "status": "success",
-        "message": "Command started",
+        "message": build_session_message(
+            running,
+            exit_code,
+            pending="Command started",
+            success="Command finished",
+        ),
         "session_id": session.id,
-        "stdout": output,
+        "stdout": stdout,
+        "stderr": stderr,
         "running": running,
         "exit_code": exit_code,
         "cwd": session.cwd,
@@ -553,14 +803,25 @@ async def write_stdin(body: WriteStdinRequest):
         raise HTTPException(status_code=404, detail="Session not found")
 
     if body.chars:
-        os.write(session.master_fd, body.chars.encode("utf-8"))
+        input_fd = session.master_fd if session.tty else session.stdin_fd
+        if input_fd is None:
+            raise HTTPException(status_code=400, detail="Session does not accept stdin")
+        os.write(input_fd, body.chars.encode("utf-8"))
 
-    output, running, exit_code = await collect_session_output(session, body.yield_time_ms)
+    stdout, stderr, running, exit_code = await collect_session_output(
+        session, body.yield_time_ms
+    )
     return {
         "status": "success",
-        "message": "Session updated",
+        "message": build_session_message(
+            running,
+            exit_code,
+            pending="Session updated",
+            success="Command finished",
+        ),
         "session_id": session.id,
-        "stdout": output,
+        "stdout": stdout,
+        "stderr": stderr,
         "running": running,
         "exit_code": exit_code,
         "cwd": session.cwd,

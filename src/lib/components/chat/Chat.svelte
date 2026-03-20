@@ -364,7 +364,8 @@
 				if (
 					model.info?.meta?.capabilities?.['code_interpreter'] &&
 					$config?.features?.enable_code_interpreter &&
-					hasFeatureAccess('code_interpreter')
+					hasFeatureAccess('code_interpreter') &&
+					!getFallbackTerminalId()
 				) {
 					codeInterpreterEnabled = model.info.meta.defaultFeatureIds.includes('code_interpreter');
 				}
@@ -490,6 +491,42 @@
 
 		if (patch.output !== undefined) {
 			message.output = patch.output;
+
+			const existingFiles = message.files ?? [];
+			const outputFiles = (patch.output ?? [])
+				.filter((item) => item?.type === 'function_call_output' && Array.isArray(item?.files))
+				.flatMap((item) => item.files ?? []);
+
+			if (outputFiles.length > 0) {
+				const mergedFiles = [
+					...existingFiles,
+					...outputFiles.filter((nextFile) => {
+						const nextKey = `${nextFile.url ?? ''}|${nextFile.name ?? ''}|${nextFile.content_type ?? ''}`;
+						return !existingFiles.some(
+							(existingFile) =>
+								`${existingFile.url ?? ''}|${existingFile.name ?? ''}|${existingFile.content_type ?? ''}` ===
+								nextKey
+						);
+					})
+				];
+
+				if (mergedFiles.length !== existingFiles.length) {
+					const newFiles = mergedFiles.slice(existingFiles.length);
+					message.files = mergedFiles;
+
+					const artifactStatus = {
+						action: 'artifact_uploaded',
+						description: 'Generated file',
+						done: true,
+						files: newFiles
+					};
+					if (message?.statusHistory) {
+						message.statusHistory.push(artifactStatus);
+					} else {
+						message.statusHistory = [artifactStatus];
+					}
+				}
+			}
 		}
 
 		if (patch.content !== undefined) {
@@ -501,7 +538,7 @@
 			message.usage = patch.usage;
 		}
 
-		history.messages[messageId] = message;
+		history.messages[messageId] = normalizeArtifactMessage(message);
 	};
 
 	const scheduleStreamMessagePatch = (messageId, patch, force = false) => {
@@ -580,6 +617,10 @@
 						} else {
 							message.statusHistory = [artifactStatus];
 						}
+
+						history.messages[event.message_id] = normalizeArtifactMessage(message);
+						await tick();
+						await saveChatHandler(event.chat_id, history);
 					}
 				} else if (type === 'chat:message:embeds' || type === 'embeds') {
 					message.embeds = data.embeds;
@@ -1427,6 +1468,204 @@
 			});
 		}
 	};
+
+	const jsonDedupeKey = (value) => {
+		try {
+			return JSON.stringify(value);
+		} catch {
+			return String(value);
+		}
+	};
+
+	const mergeUniqueList = (existingList = [], incomingList = []) => {
+		const merged = [];
+		const seen = new Set();
+
+		for (const item of [...(existingList ?? []), ...(incomingList ?? [])]) {
+			const key = jsonDedupeKey(item);
+			if (seen.has(key)) {
+				continue;
+			}
+			seen.add(key);
+			merged.push(item);
+		}
+
+		return merged;
+	};
+
+	const assistantMessageCompletenessScore = (message) => {
+		if (!message || message.role !== 'assistant') {
+			return 0;
+		}
+
+		let score = 0;
+		const output = Array.isArray(message.output) ? message.output : [];
+
+		for (const item of output) {
+			if (item?.type === 'function_call') {
+				score += 2;
+				if (item?.status === 'completed') {
+					score += 3;
+				}
+			} else if (item?.type === 'function_call_output') {
+				score += 12;
+				if (item?.output?.length) {
+					score += 3;
+				}
+				if (item?.files?.length) {
+					score += 6;
+				}
+				if (item?.embeds?.length) {
+					score += 4;
+				}
+			} else if (item?.type === 'message') {
+				for (const part of item?.content ?? []) {
+					const text = part?.text ?? '';
+					if (typeof text === 'string') {
+						score += Math.min(text.trim().length, 200);
+					}
+				}
+			}
+		}
+
+		if (typeof message.content === 'string') {
+			score += (message.content.match(/done="true"/g) ?? []).length * 4;
+			score -= (message.content.match(/done="false"/g) ?? []).length * 2;
+			if (message.content.includes('Tool Executed')) {
+				score += 6;
+			}
+		}
+
+		score += (message.files ?? []).length * 8;
+		score += (message.statusHistory ?? []).length;
+		if (message.done) {
+			score += 2;
+		}
+
+		return score;
+	};
+
+	const normalizeArtifactMessage = (message) => {
+		if (!message || message.role !== 'assistant') {
+			return message;
+		}
+
+		const normalizedMessage = {
+			...message
+		};
+
+		const artifactFiles =
+			normalizedMessage.files?.length > 0
+				? normalizedMessage.files
+				: (normalizedMessage.statusHistory ?? [])
+						.filter((item) => item?.action === 'artifact_uploaded' && Array.isArray(item?.files))
+						.flatMap((item) => item.files ?? []);
+
+		if (artifactFiles.length > 0 && (!normalizedMessage.files || normalizedMessage.files.length === 0)) {
+			normalizedMessage.files = artifactFiles;
+		}
+
+		if (
+			artifactFiles.length > 0 &&
+			typeof normalizedMessage.content === 'string' &&
+			normalizedMessage.content.includes('name="download_artifact"') &&
+			normalizedMessage.content.includes('<summary>Executing...</summary>')
+		) {
+			normalizedMessage.content = normalizedMessage.content
+				.replace('done="false"', 'done="true"')
+				.replace('<summary>Executing...</summary>', '<summary>Tool Executed</summary>');
+		}
+
+		if (Array.isArray(normalizedMessage.output)) {
+			const hasFunctionCallOutput = normalizedMessage.output.some(
+				(item) => item?.type === 'function_call_output'
+			);
+			if (!hasFunctionCallOutput && artifactFiles.length > 0) {
+				const downloadCall = normalizedMessage.output.find(
+					(item) => item?.type === 'function_call' && item?.name === 'download_artifact'
+				);
+				if (downloadCall) {
+					normalizedMessage.output = [
+						...normalizedMessage.output,
+						{
+							id: `fco_${downloadCall.call_id ?? 'download_artifact'}`,
+							type: 'function_call_output',
+							call_id: downloadCall.call_id ?? '',
+							status: 'completed',
+							output: [
+								{
+									type: 'input_text',
+									text: 'Generated file'
+								}
+							],
+							files: artifactFiles
+						}
+					];
+				}
+			}
+		}
+
+		return normalizedMessage;
+	};
+
+	const mergeHistoryMessage = (existingMessage, incomingMessage) => {
+		if (!existingMessage) {
+			return normalizeArtifactMessage(incomingMessage);
+		}
+		if (!incomingMessage) {
+			return normalizeArtifactMessage(existingMessage);
+		}
+
+		const mergedMessage = {
+			...existingMessage,
+			...incomingMessage
+		};
+
+		if (existingMessage.files || incomingMessage.files) {
+			mergedMessage.files = mergeUniqueList(existingMessage.files, incomingMessage.files);
+		}
+
+		if (existingMessage.statusHistory || incomingMessage.statusHistory) {
+			mergedMessage.statusHistory = mergeUniqueList(
+				existingMessage.statusHistory,
+				incomingMessage.statusHistory
+			);
+		}
+
+		if (existingMessage.childrenIds || incomingMessage.childrenIds) {
+			mergedMessage.childrenIds = mergeUniqueList(
+				existingMessage.childrenIds,
+				incomingMessage.childrenIds
+			);
+		}
+
+		if (existingMessage.role === 'assistant') {
+			const existingScore = assistantMessageCompletenessScore(existingMessage);
+			const incomingScore = assistantMessageCompletenessScore(incomingMessage);
+
+			if (existingScore >= incomingScore) {
+				if (existingMessage.content !== undefined) {
+					mergedMessage.content = existingMessage.content;
+				}
+				if (existingMessage.output !== undefined) {
+					mergedMessage.output = existingMessage.output;
+				}
+				if (existingMessage.usage !== undefined) {
+					mergedMessage.usage = existingMessage.usage;
+				}
+				if (existingMessage.error && !incomingMessage.error) {
+					mergedMessage.error = existingMessage.error;
+				}
+			}
+
+			if (existingMessage.done || incomingMessage.done) {
+				mergedMessage.done = true;
+			}
+		}
+
+		return normalizeArtifactMessage(mergedMessage);
+	};
+
 	const chatCompletedHandler = async (_chatId, modelId, responseMessageId, messages) => {
 		const res = await chatCompleted(localStorage.token, {
 			model: modelId,
@@ -1455,13 +1694,14 @@
 			// Update chat history with the new messages
 			for (const message of res.messages) {
 				if (message?.id) {
-					// Add null check for message and message.id
+					const existingMessage = history.messages[message.id];
+					const mergedMessage = mergeHistoryMessage(existingMessage, message);
 					history.messages[message.id] = {
-						...history.messages[message.id],
-						...(history.messages[message.id].content !== message.content
-							? { originalContent: history.messages[message.id].content }
-							: {}),
-						...message
+						...mergedMessage,
+						...(existingMessage?.content !== undefined &&
+						existingMessage.content !== mergedMessage?.content
+							? { originalContent: existingMessage.content }
+							: {})
 					};
 				}
 			}
@@ -1526,12 +1766,14 @@
 		if (res !== null && res.messages) {
 			// Update chat history with the new messages
 			for (const message of res.messages) {
+				const existingMessage = history.messages[message.id];
+				const mergedMessage = mergeHistoryMessage(existingMessage, message);
 				history.messages[message.id] = {
-					...history.messages[message.id],
-					...(history.messages[message.id].content !== message.content
-						? { originalContent: history.messages[message.id].content }
-						: {}),
-					...message
+					...mergedMessage,
+					...(existingMessage?.content !== undefined &&
+					existingMessage.content !== mergedMessage?.content
+						? { originalContent: existingMessage.content }
+						: {})
 				};
 			}
 		}
@@ -2066,6 +2308,7 @@
 
 	const getFeatures = () => {
 		let features = {};
+		const activeTerminalId = $selectedTerminalId ?? getFallbackTerminalId();
 
 		if ($config?.features)
 			features = {
@@ -2077,7 +2320,8 @@
 						: false,
 				code_interpreter:
 					$config?.features?.enable_code_interpreter &&
-					($user?.role === 'admin' || $user?.permissions?.features?.code_interpreter)
+					($user?.role === 'admin' || $user?.permissions?.features?.code_interpreter) &&
+					!activeTerminalId
 						? codeInterpreterEnabled
 						: false,
 				web_search:
@@ -2114,6 +2358,21 @@
 		return tokens
 			.filter(Boolean)
 			.map((token) => decodeURIComponent(JSON.parse(`"${token.replace(/"/g, '\\"')}"`)));
+	};
+
+	const matchesModelAlias = (modelId = '', canonicalId = '') =>
+		modelId === canonicalId ||
+		modelId.endsWith(`.${canonicalId}`) ||
+		modelId.endsWith(`/${canonicalId}`) ||
+		modelId.endsWith(`:${canonicalId}`);
+
+	const getReasoningEffort = (model) => {
+		return (
+			params?.reasoning_effort ??
+			$settings?.params?.reasoning_effort ??
+			model?.info?.params?.reasoning_effort ??
+			(matchesModelAlias(model?.id, 'gpt-5.4') ? 'high' : undefined)
+		);
 	};
 
 	const sendMessageSocket = async (model, _messages, _history, responseMessageId, _chatId) => {
@@ -2182,6 +2441,8 @@
 				...(message.output ? { output: message.output } : {})
 			}))
 		].filter((message) => message);
+
+		const activeTerminalId = $selectedTerminalId ?? getFallbackTerminalId();
 
 		messages = messages
 			.map((message, idx, arr) => {
@@ -2267,7 +2528,6 @@
 
 		// Prefer the explicitly selected terminal; otherwise keep the first
 		// available sandbox terminal attached to the request by default.
-		const activeTerminalId = $selectedTerminalId ?? getFallbackTerminalId();
 		if (!$selectedTerminalId && activeTerminalId && (files?.length ?? 0) > 0) {
 			selectedTerminalId.set(activeTerminalId);
 		}
@@ -2281,7 +2541,10 @@
 				params: {
 					...$settings?.params,
 					...params,
-					stop: getStopTokens()
+					stop: getStopTokens(),
+					...(getReasoningEffort(model)
+						? { reasoning_effort: getReasoningEffort(model) }
+						: {})
 				},
 
 				files: (files?.length ?? 0) > 0 ? files : undefined,

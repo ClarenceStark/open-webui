@@ -5,7 +5,7 @@
 	const i18n = getContext('i18n');
 
 	export let text: string | null = null;
-	export let startedAt: number | null = null;
+	export let startedAt: number | string | null = null;
 
 	let elapsedSeconds = 0;
 	let currentStartedAt = Math.floor(Date.now() / 1000);
@@ -15,12 +15,17 @@
 
 	const nowInSeconds = () => Math.floor(Date.now() / 1000);
 
-	const normalizeStartedAt = (value: number | null) => {
-		if (!value || !Number.isFinite(value) || value <= 0) {
+	const normalizeStartedAt = (value: number | string | null) => {
+		const numericValue =
+			typeof value === 'string' && value.trim() !== '' ? Number(value) : value;
+
+		if (!numericValue || !Number.isFinite(numericValue) || numericValue <= 0) {
 			return nowInSeconds();
 		}
 
-		return value > 1_000_000_000_000 ? Math.floor(value / 1000) : Math.floor(value);
+		return numericValue > 1_000_000_000_000
+			? Math.floor(numericValue / 1000)
+			: Math.floor(numericValue);
 	};
 
 	const formatElapsed = (seconds: number) => {

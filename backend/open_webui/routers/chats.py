@@ -1,5 +1,6 @@
 import json
 import logging
+from copy import deepcopy
 from typing import Optional
 from sqlalchemy.orm import Session
 import asyncio
@@ -39,6 +40,151 @@ from open_webui.utils.access_control import has_permission
 log = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _json_dedupe_key(value):
+    try:
+        return json.dumps(value, sort_keys=True, ensure_ascii=False)
+    except Exception:
+        return str(value)
+
+
+def _merge_unique_list(existing_list, incoming_list):
+    merged = []
+    seen = set()
+
+    for item in (existing_list or []) + (incoming_list or []):
+        key = _json_dedupe_key(item)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(item)
+
+    return merged
+
+
+def _assistant_message_completeness_score(message: dict) -> int:
+    score = 0
+
+    output = message.get("output")
+    if isinstance(output, list):
+        for item in output:
+            item_type = item.get("type")
+            if item_type == "function_call":
+                score += 2
+                if item.get("status") == "completed":
+                    score += 3
+            elif item_type == "function_call_output":
+                score += 12
+                if item.get("output"):
+                    score += 3
+                if item.get("files"):
+                    score += 6
+                if item.get("embeds"):
+                    score += 4
+            elif item_type == "message":
+                content = item.get("content", [])
+                if isinstance(content, list):
+                    for part in content:
+                        text = part.get("text", "")
+                        if isinstance(text, str):
+                            score += min(len(text.strip()), 200)
+
+    content = message.get("content")
+    if isinstance(content, str):
+        score += content.count('done="true"') * 4
+        score -= content.count('done="false"') * 2
+        if "Tool Executed" in content:
+            score += 6
+
+    if message.get("files"):
+        score += len(message.get("files", [])) * 8
+
+    if message.get("statusHistory"):
+        score += len(message.get("statusHistory", []))
+
+    if message.get("done"):
+        score += 2
+
+    return score
+
+
+def _merge_history_messages(existing_message: dict, incoming_message: dict) -> dict:
+    existing_message = deepcopy(existing_message or {})
+    incoming_message = deepcopy(incoming_message or {})
+
+    merged = {**existing_message, **incoming_message}
+
+    existing_files = existing_message.get("files")
+    incoming_files = incoming_message.get("files")
+    if existing_files or incoming_files:
+        merged["files"] = _merge_unique_list(existing_files, incoming_files)
+
+    existing_status = existing_message.get("statusHistory")
+    incoming_status = incoming_message.get("statusHistory")
+    if existing_status or incoming_status:
+        merged["statusHistory"] = _merge_unique_list(existing_status, incoming_status)
+
+    existing_children = existing_message.get("childrenIds")
+    incoming_children = incoming_message.get("childrenIds")
+    if existing_children or incoming_children:
+        merged["childrenIds"] = _merge_unique_list(existing_children, incoming_children)
+
+    if existing_message.get("role") == "assistant":
+        existing_score = _assistant_message_completeness_score(existing_message)
+        incoming_score = _assistant_message_completeness_score(incoming_message)
+
+        if existing_score >= incoming_score:
+            if existing_message.get("content") is not None:
+                merged["content"] = existing_message.get("content")
+            if existing_message.get("output") is not None:
+                merged["output"] = existing_message.get("output")
+            if existing_message.get("usage") is not None:
+                merged["usage"] = existing_message.get("usage")
+            if existing_message.get("error") is not None and not incoming_message.get(
+                "error"
+            ):
+                merged["error"] = existing_message.get("error")
+
+        if existing_message.get("done") or incoming_message.get("done"):
+            merged["done"] = True
+
+    return merged
+
+
+def _merge_chat_payload(existing_chat: dict, incoming_chat: dict) -> dict:
+    merged_chat = {**existing_chat, **incoming_chat}
+
+    existing_history = deepcopy(existing_chat.get("history", {}) or {})
+    incoming_history = deepcopy(incoming_chat.get("history", {}) or {})
+
+    existing_messages = deepcopy(existing_history.get("messages", {}) or {})
+    incoming_messages = deepcopy(incoming_history.get("messages", {}) or {})
+
+    merged_messages = deepcopy(existing_messages)
+    for message_id, incoming_message in incoming_messages.items():
+        if message_id in merged_messages:
+            merged_messages[message_id] = _merge_history_messages(
+                merged_messages[message_id], incoming_message
+            )
+        else:
+            merged_messages[message_id] = incoming_message
+
+    merged_history = {
+        **existing_history,
+        **incoming_history,
+        "messages": merged_messages,
+    }
+    if not merged_history.get("currentId"):
+        merged_history["currentId"] = existing_history.get("currentId")
+
+    merged_chat["history"] = merged_history
+
+    current_id = merged_history.get("currentId")
+    if merged_messages and current_id:
+        merged_chat["messages"] = get_message_list(merged_messages, current_id)
+
+    return merged_chat
 
 ############################
 # GetChatList
@@ -979,7 +1125,7 @@ async def update_chat_by_id(
 ):
     chat = Chats.get_chat_by_id_and_user_id(id, user.id, db=db)
     if chat:
-        updated_chat = {**chat.chat, **form_data.chat}
+        updated_chat = _merge_chat_payload(chat.chat, form_data.chat)
         chat = Chats.update_chat_by_id(id, updated_chat, db=db)
         return ChatResponse(**chat.model_dump())
     else:
