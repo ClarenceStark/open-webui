@@ -1015,9 +1015,9 @@ async def get_terminal_tools(
     for spec in specs:
         function_name = spec["name"]
 
-        # Inject CWD into run_command description
+        # Inject CWD into command execution tool descriptions
         tool_spec = clean_openai_tool_schema(spec)
-        if function_name == "run_command" and terminal_cwd:
+        if function_name in {"run_command", "exec_command"} and terminal_cwd:
             tool_spec["description"] = (
                 tool_spec.get("description", "")
                 + f"\n\nThe current working directory is: {terminal_cwd}"
@@ -1044,6 +1044,11 @@ async def get_terminal_tools(
             "callable": callable,
             "spec": tool_spec,
             "type": "terminal",
+            "server": {
+                "url": connection.get("url", ""),
+                "headers": headers,
+                "cookies": cookies,
+            },
         }
 
     return tools_dict

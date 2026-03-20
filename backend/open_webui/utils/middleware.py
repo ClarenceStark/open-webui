@@ -4,9 +4,12 @@ import logging
 import sys
 import os
 import base64
+import io
+import mimetypes
 import textwrap
 
 import asyncio
+import aiohttp
 from aiocache import cached
 from typing import Any, Optional
 import random
@@ -20,7 +23,7 @@ from uuid import uuid4
 from concurrent.futures import ThreadPoolExecutor
 
 
-from fastapi import Request, HTTPException
+from fastapi import Request, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse
 from starlette.responses import Response, StreamingResponse, JSONResponse
 
@@ -28,6 +31,7 @@ from starlette.responses import Response, StreamingResponse, JSONResponse
 from open_webui.utils.misc import is_string_allowed
 from open_webui.models.oauth_sessions import OAuthSessions
 from open_webui.models.chats import Chats
+from open_webui.models.files import Files
 from open_webui.models.folders import Folders
 from open_webui.models.users import Users
 from open_webui.socket.main import (
@@ -65,6 +69,8 @@ from open_webui.utils.files import (
     get_image_base64_from_url,
     get_image_url_from_base64,
 )
+from open_webui.routers.files import upload_file_handler
+from open_webui.storage.provider import Storage
 
 
 from open_webui.models.users import UserModel
@@ -124,6 +130,7 @@ from open_webui.config import (
     CODE_INTERPRETER_BLOCKED_MODULES,
 )
 from open_webui.env import (
+    AIOHTTP_CLIENT_TIMEOUT,
     GLOBAL_LOG_LEVEL,
     ENABLE_CHAT_RESPONSE_BASE64_IMAGE_URL_CONVERSION,
     CHAT_RESPONSE_STREAM_DELTA_CHUNK_SIZE,
@@ -209,6 +216,388 @@ def _split_tool_calls(
                 expanded.append(cloned)
 
     return expanded
+
+
+def get_model_api_config(request: Request, model: dict) -> dict:
+    idx = model.get("urlIdx")
+    if idx is None:
+        return {}
+
+    url = request.app.state.config.OPENAI_API_BASE_URLS[idx]
+    return request.app.state.config.OPENAI_API_CONFIGS.get(
+        str(idx),
+        request.app.state.config.OPENAI_API_CONFIGS.get(url, {}),
+    )
+
+
+def is_responses_api_config(api_config: Optional[dict]) -> bool:
+    api_type = (api_config or {}).get("api_type", "").lower()
+    return api_type in ("responses", "responses_v1")
+
+
+def get_native_web_search_tool(api_config: Optional[dict], user: Optional[UserModel]):
+    if not is_responses_api_config(api_config):
+        return None
+
+    tool = {
+        "type": "web_search",
+        "search_context_size": "medium",
+    }
+
+    user_settings = getattr(user, "settings", None) if user else None
+    if hasattr(user_settings, "model_dump"):
+        user_settings = user_settings.model_dump(exclude_none=True)
+    elif user_settings is None:
+        user_settings = {}
+
+    timezone = (
+        user_settings.get("ui", {}).get("timezone")
+        or getattr(user, "timezone", None)
+        if user
+        else None
+    )
+    if timezone:
+        tool["user_location"] = {
+            "type": "approximate",
+            "timezone": timezone,
+        }
+
+    return tool
+
+
+def get_web_search_status_from_response_item(item: dict) -> Optional[dict]:
+    if item.get("type") != "web_search_call":
+        return None
+
+    action = item.get("action") or {}
+    action_type = action.get("type", "search")
+    status = item.get("status", "in_progress")
+    done = status in {"completed", "failed", "cancelled"}
+
+    if action_type == "open_page":
+        url = action.get("url", "")
+        return {
+            "action": "open_page",
+            "description": "Opening page",
+            "done": done,
+            "url": url,
+            "urls": [url] if url else [],
+        }
+
+    if action_type == "find_in_page":
+        url = action.get("url", "")
+        pattern = action.get("pattern", "")
+        return {
+            "action": "find_in_page",
+            "description": "Finding in page",
+            "done": done,
+            "url": url,
+            "urls": [url] if url else [],
+            "pattern": pattern,
+        }
+
+    queries = action.get("queries") or []
+    query = action.get("query", "")
+    return {
+        "action": "web_search",
+        "description": "Searching the web",
+        "done": done,
+        "query": query,
+        "queries": queries,
+    }
+
+
+def build_terminal_server_auth(
+    request: Request, user: UserModel, connection: dict, extra_params: dict
+) -> tuple[dict, dict]:
+    headers = {"X-User-Id": user.id}
+    cookies = {}
+    auth_type = connection.get("auth_type", "bearer")
+
+    if auth_type == "bearer":
+        key = connection.get("key", "")
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
+    elif auth_type == "session":
+        cookies = request.cookies
+        token = getattr(getattr(request.state, "token", None), "credentials", None)
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+    elif auth_type == "system_oauth":
+        cookies = request.cookies
+        oauth_token = extra_params.get("__oauth_token__", None) or {}
+        access_token = oauth_token.get("access_token", "")
+        if access_token:
+            headers["Authorization"] = f"Bearer {access_token}"
+
+    return headers, cookies
+
+
+def resolve_terminal_server_binding(
+    request: Request,
+    user: UserModel,
+    metadata: dict,
+    extra_params: dict,
+) -> Optional[dict]:
+    terminal_id = metadata.get("terminal_id")
+    if not terminal_id:
+        return None
+
+    connections = request.app.state.config.TERMINAL_SERVER_CONNECTIONS or []
+    connection = next((c for c in connections if c.get("id") == terminal_id), None)
+    if connection is not None:
+        if not has_connection_access(user, connection):
+            raise HTTPException(status_code=403, detail="Access denied to sandbox terminal")
+
+        headers, cookies = build_terminal_server_auth(
+            request, user, connection, extra_params
+        )
+        return {
+            "url": connection.get("url", "").rstrip("/"),
+            "headers": headers,
+            "cookies": cookies,
+            "source": "system",
+        }
+
+    direct_tool_servers = metadata.get("tool_servers", None) or []
+    direct_server = next(
+        (
+            server
+            for server in direct_tool_servers
+            if server.get("url") == terminal_id
+            and any(
+                spec.get("name")
+                in {
+                    "exec_command",
+                    "run_command",
+                    "write_stdin",
+                    "list_files",
+                    "read_file",
+                }
+                for spec in server.get("specs", []) or []
+            )
+        ),
+        None,
+    )
+    if direct_server is None:
+        return None
+
+    headers, cookies = build_terminal_server_auth(
+        request, user, direct_server, extra_params
+    )
+    return {
+        "url": direct_server.get("url", "").rstrip("/"),
+        "headers": headers,
+        "cookies": cookies,
+        "source": "direct",
+    }
+
+
+def build_terminal_attachment_prompt(mounted_files: list[dict], target_dir: str) -> str:
+    lines = [
+        "The user's uploaded Open WebUI files have been copied into the sandbox.",
+        f"Sandbox attachment directory: {target_dir}",
+        "Use these exact paths when reading or modifying the uploaded files:",
+    ]
+    for mounted_file in mounted_files:
+        lines.append(f"- {mounted_file['name']}: {mounted_file['path']}")
+    lines.append(
+        "Prefer these sandbox paths over guessing host filesystem paths or asking for re-uploads."
+    )
+
+    return "<sandbox_files>\n" + "\n".join(lines) + "\n</sandbox_files>"
+
+
+async def sync_chat_files_to_terminal(
+    request: Request,
+    files: list[dict],
+    user: UserModel,
+    metadata: dict,
+    extra_params: dict,
+) -> list[dict]:
+    synced_sources = []
+    seen_file_ids = set()
+    for file_item in files or []:
+        if not isinstance(file_item, dict):
+            continue
+
+        file_id = file_item.get("id")
+        if not file_id or file_id in seen_file_ids:
+            continue
+        seen_file_ids.add(file_id)
+
+        db_file = Files.get_file_by_id_and_user_id(file_id, user.id)
+        if db_file is None and user.role == "admin":
+            db_file = Files.get_file_by_id(file_id)
+        if db_file is None or not db_file.path:
+            continue
+
+        filename = db_file.filename or file_item.get("name") or file_id
+        content_type = (
+            file_item.get("content_type")
+            or (db_file.meta or {}).get("content_type")
+            or mimetypes.guess_type(filename)[0]
+            or "application/octet-stream"
+        )
+
+        synced_sources.append(
+            {
+                "id": file_id,
+                "filename": filename,
+                "content_type": content_type,
+                "local_path": Storage.get_file(db_file.path),
+            }
+        )
+
+    if not synced_sources:
+        return []
+
+    terminal_server = resolve_terminal_server_binding(
+        request, user, metadata, extra_params
+    )
+    if terminal_server is None:
+        raise HTTPException(
+            status_code=400,
+            detail="No sandbox terminal is available for attached files",
+        )
+
+    def sanitize_path_component(value: Optional[str], fallback: str) -> str:
+        raw = str(value or fallback)
+        return re.sub(r"[^A-Za-z0-9._-]", "_", raw)
+
+    target_dir = (
+        f"/workspace/open-webui-inputs/"
+        f"{sanitize_path_component(metadata.get('chat_id'), 'adhoc')}/"
+        f"{sanitize_path_component(metadata.get('message_id'), 'message')}"
+    )
+
+    headers = copy.deepcopy(terminal_server.get("headers", {}) or {})
+    cookies = copy.deepcopy(terminal_server.get("cookies", {}) or {})
+    upload_headers = {
+        key: value for key, value in headers.items() if key.lower() != "content-type"
+    }
+
+    mounted_files = []
+    async with aiohttp.ClientSession(
+        trust_env=True,
+        timeout=aiohttp.ClientTimeout(total=AIOHTTP_CLIENT_TIMEOUT),
+    ) as session:
+        async with session.post(
+            f"{terminal_server['url']}/files/mkdir",
+            json={"path": target_dir},
+            headers={**headers, "Content-Type": "application/json"},
+            cookies=cookies,
+        ) as response:
+            if response.status >= 400:
+                error_text = await response.text()
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Failed to prepare sandbox attachment directory: HTTP {response.status}: {error_text}",
+                )
+
+        for source in synced_sources:
+            form = aiohttp.FormData()
+            with open(source["local_path"], "rb") as handle:
+                form.add_field(
+                    "file",
+                    handle,
+                    filename=source["filename"],
+                    content_type=source["content_type"],
+                )
+                async with session.post(
+                    f"{terminal_server['url']}/files/upload",
+                    params={"directory": target_dir},
+                    data=form,
+                    headers=upload_headers,
+                    cookies=cookies,
+                ) as response:
+                    if response.status >= 400:
+                        error_text = await response.text()
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Failed to copy '{source['filename']}' into the sandbox: HTTP {response.status}: {error_text}",
+                        )
+                    payload = await response.json()
+
+            mounted_path = payload.get("path") or (
+                f"{target_dir.rstrip('/')}/{source['filename']}"
+            )
+            mounted_files.append(
+                {
+                    "id": source["id"],
+                    "name": source["filename"],
+                    "path": mounted_path,
+                    "content_type": source["content_type"],
+                }
+            )
+
+    metadata["terminal_files"] = mounted_files
+    metadata["terminal_files_dir"] = target_dir
+    return mounted_files
+
+
+def build_tool_execution_status(
+    tool_name: str,
+    tool_params: dict,
+    done: bool = False,
+) -> Optional[dict]:
+    descriptions = {
+        "exec_command": ("Running command", "Command finished"),
+        "run_command": ("Running command", "Command finished"),
+        "write_stdin": ("Sending input to session", "Input sent"),
+        "list_files": ("Listing files", "Files listed"),
+        "read_file": ("Reading file", "File read"),
+        "download_artifact": ("Preparing artifact", "Artifact ready"),
+        "view_image": ("Preparing image", "Image ready"),
+        "apply_patch": ("Applying patch", "Patch applied"),
+        "write_file": ("Writing file", "File written"),
+        "replace_file_content": ("Updating file", "File updated"),
+        "display_file": ("Preparing file preview", "File preview ready"),
+    }
+
+    if tool_name not in descriptions:
+        return None
+
+    pending_text, done_text = descriptions[tool_name]
+    status = {
+        "action": tool_name,
+        "description": done_text if done else pending_text,
+        "done": done,
+    }
+
+    cmd = tool_params.get("cmd") or tool_params.get("command")
+    if cmd:
+        status["command"] = cmd
+    path = tool_params.get("path") or tool_params.get("directory")
+    if path:
+        status["path"] = path
+    workdir = tool_params.get("workdir")
+    if workdir:
+        status["workdir"] = workdir
+    session_id = tool_params.get("session_id")
+    if session_id:
+        status["session_id"] = session_id
+    pattern = tool_params.get("pattern")
+    if pattern:
+        status["pattern"] = pattern
+
+    return status
+
+
+async def emit_tool_execution_status(
+    event_emitter,
+    tool_name: str,
+    tool_params: dict,
+    done: bool = False,
+):
+    if not event_emitter:
+        return
+
+    status = build_tool_execution_status(tool_name, tool_params, done=done)
+    if not status:
+        return
+
+    await event_emitter({"type": "status", "data": status})
 
 
 def get_citation_source_from_tool_result(
@@ -488,6 +877,40 @@ def serialize_output(output: list) -> str:
                 content = f'{content}<details type="reasoning" done="true" duration="{duration or 0}">\n<summary>Thought for {duration or 0} seconds</summary>\n{display}\n</details>\n'
             else:
                 content = f'{content}<details type="reasoning" done="false">\n<summary>Thinking…</summary>\n{display}\n</details>\n'
+
+        elif item_type == "web_search_call":
+            if content and not content.endswith("\n"):
+                content += "\n"
+
+            action = item.get("action") or {}
+            action_type = action.get("type", "search")
+            call_id = item.get("id", "") or output_id("ws")
+            status = item.get("status", "in_progress")
+            is_last_item = idx == len(output) - 1
+            done = status in {"completed", "failed", "cancelled"} or not is_last_item
+
+            if action_type == "open_page":
+                name = "open_page"
+                arguments = {
+                    "url": action.get("url", ""),
+                }
+                result_text = "Opened page" if done else "Opening page"
+            elif action_type == "find_in_page":
+                name = "find_in_page"
+                arguments = {
+                    "url": action.get("url", ""),
+                    "pattern": action.get("pattern", ""),
+                }
+                result_text = "Finished searching within page" if done else "Searching within page"
+            else:
+                name = "web_search"
+                arguments = {
+                    "query": action.get("query", ""),
+                    "queries": action.get("queries", []),
+                }
+                result_text = "Search completed" if done else "Searching the web"
+
+            content += f'<details type="tool_calls" done="{"true" if done else "false"}" id="{call_id}" name="{name}" arguments="{html.escape(json.dumps(arguments, ensure_ascii=False))}" result="{html.escape(json.dumps(result_text, ensure_ascii=False))}">\n<summary>{"Tool Executed" if done else "Executing..."}</summary>\n</details>\n'
 
         elif item_type == "open_webui:code_interpreter":
             content_stripped, original_whitespace = split_content_and_whitespace(
@@ -1013,7 +1436,117 @@ def apply_source_context_to_messages(
         )
 
 
-def process_tool_result(
+async def upload_artifact_to_chat(
+    request: Request,
+    artifact: dict,
+    metadata: dict,
+    user: UserModel,
+    tool_info: Optional[dict] = None,
+):
+    filename = artifact.get("name") or artifact.get("filename")
+    path = artifact.get("path", "")
+    content_type = artifact.get("content_type")
+    content = artifact.get("content")
+
+    if not filename and path:
+        filename = os.path.basename(path)
+    if not filename:
+        filename = "artifact"
+
+    file_bytes = None
+    file_url = None
+
+    if isinstance(content, str) and content.startswith("data:"):
+        file_url = get_file_url_from_base64(
+            request,
+            content,
+            {
+                "chat_id": metadata.get("chat_id"),
+                "message_id": metadata.get("message_id"),
+                "session_id": metadata.get("session_id"),
+                "result": artifact,
+            },
+            user,
+        )
+        guessed_type = content.split(";", 1)[0].replace("data:", "", 1)
+        content_type = content_type or guessed_type
+    elif path and tool_info and tool_info.get("server", {}).get("url"):
+        server = tool_info.get("server", {})
+        base_url = server.get("url", "").rstrip("/")
+        headers = copy.deepcopy(server.get("headers", {}) or {})
+        cookies = copy.deepcopy(server.get("cookies", {}) or {})
+
+        async with aiohttp.ClientSession(
+            trust_env=True,
+            timeout=aiohttp.ClientTimeout(total=AIOHTTP_CLIENT_TIMEOUT),
+        ) as session:
+            async with session.get(
+                f"{base_url}/files/view",
+                params={"path": path},
+                headers=headers,
+                cookies=cookies,
+            ) as response:
+                if response.status >= 400:
+                    error_text = await response.text()
+                    raise Exception(
+                        f"Failed to download artifact '{path}': HTTP {response.status}: {error_text}"
+                    )
+
+                file_bytes = await response.read()
+                content_type = (
+                    content_type
+                    or response.headers.get("content-type")
+                    or mimetypes.guess_type(filename)[0]
+                    or "application/octet-stream"
+                )
+
+    if file_url is None and file_bytes is None:
+        return None
+
+    if file_url is None:
+        upload = UploadFile(
+            file=io.BytesIO(file_bytes),
+            filename=filename,
+            headers={"content-type": content_type or "application/octet-stream"},
+        )
+        file_item = upload_file_handler(
+            request,
+            file=upload,
+            metadata={
+                "chat_id": metadata.get("chat_id"),
+                "message_id": metadata.get("message_id"),
+                "session_id": metadata.get("session_id"),
+                "source": "sandbox_artifact",
+            },
+            process=False,
+            user=user,
+        )
+        file_url = request.app.url_path_for("get_file_content_by_id", id=file_item.id)
+
+    resolved_content_type = content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    file_type = "image" if resolved_content_type.startswith("image/") else "file"
+    file_item = {
+        "type": file_type,
+        "url": file_url,
+        "name": filename,
+        "filename": filename,
+        "content_type": resolved_content_type,
+        **({"size": len(file_bytes)} if file_bytes is not None else {}),
+    }
+
+    if metadata.get("chat_id") and metadata.get("message_id"):
+        db_files = Chats.add_message_files_by_id_and_message_id(
+            metadata["chat_id"],
+            metadata["message_id"],
+            [file_item],
+        )
+        if db_files:
+            file_item = db_files[-1]
+
+    return file_item
+
+
+async def process_tool_result(
     request,
     tool_function_name,
     tool_result,
@@ -1021,6 +1554,7 @@ def process_tool_result(
     direct_tool=False,
     metadata=None,
     user=None,
+    tool_info=None,
 ):
     tool_result_embeds = []
     EXTERNAL_TOOL_TYPES = ("external", "action", "terminal")
@@ -1148,6 +1682,39 @@ def process_tool_result(
                     )
                     tool_result.remove(item)
 
+    artifact_summary = None
+    if isinstance(tool_result, dict) and tool_result.get("artifacts"):
+        artifacts = tool_result.get("artifacts", []) or []
+        for artifact in artifacts:
+            if not isinstance(artifact, dict):
+                continue
+
+            uploaded_artifact = await upload_artifact_to_chat(
+                request,
+                artifact,
+                metadata or {},
+                user,
+                tool_info=tool_info,
+            )
+            if uploaded_artifact:
+                tool_result_files.append(uploaded_artifact)
+
+        artifact_summary = (
+            tool_result.get("summary")
+            or tool_result.get("message")
+            or f"{tool_function_name}: Generated {len(tool_result_files)} artifact(s)."
+        )
+        tool_result = {
+            key: value
+            for key, value in tool_result.items()
+            if key not in {"artifacts", "summary"}
+        }
+        if artifact_summary and (
+            not tool_result
+            or set(tool_result.keys()).issubset({"status", "message"})
+        ):
+            tool_result = artifact_summary
+
     if isinstance(tool_result, list):
         tool_result = {"results": tool_result}
 
@@ -1181,7 +1748,7 @@ async def terminal_event_handler(
 
     - display_file  → emits 'terminal:display_file' to open the file preview.
     - write_file / replace_file_content → emits 'terminal:write_file' to refresh.
-    - run_command → emits 'terminal:run_command' with cwd to refresh if relevant.
+    - run_command / exec_command → emits 'terminal:run_command' with cwd to refresh if relevant.
     """
     if not event_emitter:
         return
@@ -1216,7 +1783,7 @@ async def terminal_event_handler(
                 "data": {"path": path},
             }
         )
-    elif tool_function_name == "run_command":
+    elif tool_function_name in ("run_command", "exec_command"):
         await event_emitter(
             {
                 "type": "terminal:run_command",
@@ -1346,6 +1913,13 @@ async def chat_completion_tools_handler(
                         if k in allowed_params
                     }
 
+                    await emit_tool_execution_status(
+                        event_emitter,
+                        tool_function_name,
+                        tool_function_params,
+                        done=False,
+                    )
+
                     if tool.get("direct", False):
                         tool_result = await event_caller(
                             {
@@ -1367,7 +1941,7 @@ async def chat_completion_tools_handler(
                     tool_result = str(e)
 
                 tool_result, tool_result_files, tool_result_embeds = (
-                    process_tool_result(
+                    await process_tool_result(
                         request,
                         tool_function_name,
                         tool_result,
@@ -1375,10 +1949,17 @@ async def chat_completion_tools_handler(
                         direct_tool,
                         metadata,
                         user,
+                        tool_info=tool,
                     )
                 )
 
                 if event_emitter:
+                    await emit_tool_execution_status(
+                        event_emitter,
+                        tool_function_name,
+                        tool_function_params,
+                        done=True,
+                    )
                     await terminal_event_handler(
                         tool_function_name,
                         tool_function_params,
@@ -2390,6 +2971,26 @@ async def process_chat_payload(request, form_data, user, metadata, model):
         raise Exception(f"{e}")
 
     features = form_data.pop("features", None) or {}
+    api_config = get_model_api_config(request, model)
+    native_responses_web_search_tool = None
+    native_responses_web_search_enabled = False
+
+    if features.get("web_search"):
+        native_responses_web_search_tool = get_native_web_search_tool(
+            api_config, user
+        )
+
+        if (
+            native_responses_web_search_tool is not None
+            and metadata.get("params", {}).get("function_calling") != "native"
+        ):
+            metadata["params"]["function_calling"] = "native"
+
+        native_responses_web_search_enabled = (
+            native_responses_web_search_tool is not None
+            and metadata.get("params", {}).get("function_calling") == "native"
+        )
+
     extra_params["__features__"] = features
     if features:
         if "voice" in features and features["voice"]:
@@ -2535,6 +3136,24 @@ async def process_chat_payload(request, form_data, user, metadata, model):
         "files": files,
     }
     form_data["metadata"] = metadata
+
+    if terminal_id and files:
+        mounted_terminal_files = await sync_chat_files_to_terminal(
+            request,
+            files,
+            user,
+            metadata,
+            extra_params,
+        )
+        if mounted_terminal_files:
+            form_data["messages"] = add_or_update_system_message(
+                build_terminal_attachment_prompt(
+                    mounted_terminal_files,
+                    metadata.get("terminal_files_dir", "/workspace"),
+                ),
+                form_data["messages"],
+                append=True,
+            )
 
     # When the caller provides an explicit OpenAI-style `tools` array in the
     # request body, skip all server-side tool resolution and pass the caller's
@@ -2765,7 +3384,11 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                         s.id for s in available_skills if s.id not in user_skill_ids
                     ],
                 },
-                features,
+                (
+                    {**features, "web_search": False}
+                    if native_responses_web_search_enabled
+                    else features
+                ),
                 model,
             )
             for name, tool_dict in builtin_tools.items():
@@ -2789,6 +3412,22 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                     sources.extend(flags.get("sources", []))
                 except Exception as e:
                     log.exception(e)
+
+        if (
+            metadata.get("params", {}).get("function_calling") == "native"
+            and native_responses_web_search_tool
+        ):
+            existing_tools = form_data.get("tools", [])
+            if not any(
+                isinstance(tool, dict)
+                and tool.get("type")
+                in {"web_search", "web_search_preview"}
+                for tool in existing_tools
+            ):
+                form_data["tools"] = [
+                    *existing_tools,
+                    native_responses_web_search_tool,
+                ]
 
     # Check if file context extraction is enabled for this model (default True)
     file_context_enabled = (
@@ -3781,6 +4420,25 @@ async def streaming_chat_response_handler(response, ctx):
                                     event_item = data.get("item", {})
 
                                     if (
+                                        event_type
+                                        in {
+                                            "response.output_item.added",
+                                            "response.output_item.done",
+                                        }
+                                        and event_item.get("type") == "web_search_call"
+                                    ):
+                                        status_data = get_web_search_status_from_response_item(
+                                            event_item
+                                        )
+                                        if status_data:
+                                            await event_emitter(
+                                                {
+                                                    "type": "status",
+                                                    "data": status_data,
+                                                }
+                                            )
+
+                                    if (
                                         event_type.startswith("response.reasoning")
                                         or event_type
                                         == "response.reasoning_summary_part.added"
@@ -4478,6 +5136,13 @@ async def streaming_chat_response_handler(response, ctx):
                                     if k in allowed_params
                                 }
 
+                                await emit_tool_execution_status(
+                                    event_emitter,
+                                    tool_function_name,
+                                    tool_function_params,
+                                    done=False,
+                                )
+
                                 if direct_tool:
                                     tool_result = await event_caller(
                                         {
@@ -4513,7 +5178,7 @@ async def streaming_chat_response_handler(response, ctx):
                                 tool_result = str(e)
 
                         tool_result, tool_result_files, tool_result_embeds = (
-                            process_tool_result(
+                            await process_tool_result(
                                 request,
                                 tool_function_name,
                                 tool_result,
@@ -4521,9 +5186,16 @@ async def streaming_chat_response_handler(response, ctx):
                                 direct_tool,
                                 metadata,
                                 user,
+                                tool_info=tool,
                             )
                         )
 
+                        await emit_tool_execution_status(
+                            event_emitter,
+                            tool_function_name,
+                            tool_function_params,
+                            done=True,
+                        )
                         await terminal_event_handler(
                             tool_function_name,
                             tool_function_params,

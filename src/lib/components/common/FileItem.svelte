@@ -62,8 +62,8 @@
 		} else {
 			if (url) {
 				if (type === 'file') {
-					if (url.startsWith('http')) {
-						window.open(`${url}/content`, '_blank').focus();
+					if (url.startsWith('http') || url.startsWith('/')) {
+						window.open(`${url}`, '_blank').focus();
 					} else {
 						window.open(`${WEBUI_API_BASE_URL}/files/${url}/content`, '_blank').focus();
 					}

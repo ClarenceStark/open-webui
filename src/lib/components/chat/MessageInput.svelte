@@ -693,6 +693,16 @@
 	const inputFilesHandler = async (inputFiles) => {
 		console.log('Input files handler called with:', inputFiles);
 
+		if (!$selectedTerminalId && ($terminalServers ?? []).length > 0 && inputFiles.length > 0) {
+			const systemTerminal = ($terminalServers ?? []).find((terminal) => terminal?.id);
+			const fallbackTerminal =
+				systemTerminal ?? ($terminalServers ?? []).find((terminal) => terminal?.url);
+
+			if (fallbackTerminal) {
+				selectedTerminalId.set(fallbackTerminal.id ?? fallbackTerminal.url);
+			}
+		}
+
 		if (
 			($config?.file?.max_count ?? null) !== null &&
 			files.length + inputFiles.length > $config?.file?.max_count

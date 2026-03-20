@@ -1886,7 +1886,7 @@ async def chat_completion(
             finally:
                 raise  # re-raise to ensure proper task cancellation handling
         except Exception as e:
-            log.debug(f"Error processing chat payload: {e}")
+            log.exception("Error processing chat request")
             if metadata.get("chat_id") and metadata.get("message_id"):
                 # Update the chat message with the error
                 try:
@@ -1913,6 +1913,8 @@ async def chat_completion(
 
                 except Exception:
                     pass
+            else:
+                raise
         finally:
             try:
                 if mcp_clients := metadata.get("mcp_clients"):

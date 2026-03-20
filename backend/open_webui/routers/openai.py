@@ -993,6 +993,13 @@ def convert_to_responses_payload(payload: dict) -> dict:
     return responses_payload
 
 
+def normalize_responses_tools_for_azure(payload: dict) -> dict:
+    # Keep Azure aligned with Codex/OpenAI Responses payloads.
+    # Some older Azure previews accepted `web_search_preview`, but current Codex
+    # behavior and modern Responses payloads use `web_search` directly.
+    return payload
+
+
 def convert_responses_result(response: dict) -> dict:
     """
     Convert non-streaming Responses API result.
@@ -1140,6 +1147,7 @@ async def generate_chat_completion(
         api_version = api_config.get("api_version", "2023-03-15-preview")
         if is_responses_v1:
             payload = convert_to_responses_payload(payload)
+            payload = normalize_responses_tools_for_azure(payload)
             request_url = f"{url}/openai/v1/responses"
         else:
             request_url, payload = convert_to_azure_payload(url, payload, api_version)
@@ -1151,6 +1159,7 @@ async def generate_chat_completion(
 
             if is_responses:
                 payload = convert_to_responses_payload(payload)
+                payload = normalize_responses_tools_for_azure(payload)
                 request_url = f"{request_url}/responses?api-version={api_version}"
             else:
                 request_url = f"{request_url}/chat/completions?api-version={api_version}"
@@ -1371,9 +1380,11 @@ async def responses(
                 headers["api-key"] = key
 
             if is_azure_v1_responses_api(api_config):
+                payload = normalize_responses_tools_for_azure(payload)
                 request_url = f"{url}/openai/v1/responses"
             else:
                 headers["api-version"] = api_version
+                payload = normalize_responses_tools_for_azure(payload)
 
                 model = payload.get("model", "")
                 request_url = (
@@ -1381,6 +1392,8 @@ async def responses(
                 )
         else:
             request_url = f"{url}/responses"
+
+        body = json.dumps(payload)
 
         session = aiohttp.ClientSession(
             trust_env=True,

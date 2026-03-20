@@ -348,7 +348,7 @@
 				if (
 					model.info?.meta?.capabilities?.['image_generation'] &&
 					$config?.features?.enable_image_generation &&
-					($user?.role === 'admin' || $user?.permissions?.features?.image_generation)
+					hasFeatureAccess('image_generation')
 				) {
 					imageGenerationEnabled = model.info.meta.defaultFeatureIds.includes('image_generation');
 				}
@@ -356,7 +356,7 @@
 				if (
 					model.info?.meta?.capabilities?.['web_search'] &&
 					$config?.features?.enable_web_search &&
-					($user?.role === 'admin' || $user?.permissions?.features?.web_search)
+					hasFeatureAccess('web_search')
 				) {
 					webSearchEnabled = model.info.meta.defaultFeatureIds.includes('web_search');
 				}
@@ -364,10 +364,12 @@
 				if (
 					model.info?.meta?.capabilities?.['code_interpreter'] &&
 					$config?.features?.enable_code_interpreter &&
-					($user?.role === 'admin' || $user?.permissions?.features?.code_interpreter)
+					hasFeatureAccess('code_interpreter')
 				) {
 					codeInterpreterEnabled = model.info.meta.defaultFeatureIds.includes('code_interpreter');
 				}
+			} else if (shouldEnableWebSearchByDefault(model)) {
+				webSearchEnabled = true;
 			}
 		}
 	};
@@ -418,6 +420,28 @@
 		} else if (type === 'terminal:run_command') {
 			showFileNavDir.set('/');
 		}
+	};
+
+	const getFallbackTerminalId = () => {
+		const systemTerminal = ($terminalServers ?? []).find((terminal) => terminal?.id);
+		if (systemTerminal?.id) {
+			return systemTerminal.id;
+		}
+
+		const directTerminal = ($terminalServers ?? []).find((terminal) => !terminal?.id && terminal?.url);
+		return directTerminal?.url ?? null;
+	};
+
+	const hasFeatureAccess = (feature: 'image_generation' | 'web_search' | 'code_interpreter') => {
+		return $user?.role === 'admin' || $user?.permissions?.features?.[feature];
+	};
+
+	const shouldEnableWebSearchByDefault = (model) => {
+		return (
+			!!model?.info?.meta?.capabilities?.['web_search'] &&
+			!!$config?.features?.enable_web_search &&
+			hasFeatureAccess('web_search')
+		);
 	};
 
 	const applyStreamingMessageEffects = (message) => {
@@ -529,7 +553,34 @@
 				} else if (type === 'chat:message' || type === 'replace') {
 					message.content = data.content;
 				} else if (type === 'chat:message:files' || type === 'files') {
-					message.files = data.files;
+					const nextFiles = data.files ?? [];
+					const existingFiles = message.files ?? [];
+					const mergedFiles = [
+						...existingFiles,
+						...nextFiles.filter((nextFile) => {
+							const nextKey = `${nextFile.url ?? ''}|${nextFile.name ?? ''}|${nextFile.content_type ?? ''}`;
+							return !existingFiles.some(
+								(existingFile) =>
+									`${existingFile.url ?? ''}|${existingFile.name ?? ''}|${existingFile.content_type ?? ''}` ===
+									nextKey
+							);
+						})
+					];
+					message.files = mergedFiles;
+
+					if (nextFiles.length > 0) {
+						const artifactStatus = {
+							action: 'artifact_uploaded',
+							description: 'Generated file',
+							done: true,
+							files: nextFiles
+						};
+						if (message?.statusHistory) {
+							message.statusHistory.push(artifactStatus);
+						} else {
+							message.statusHistory = [artifactStatus];
+						}
+					}
 				} else if (type === 'chat:message:embeds' || type === 'embeds') {
 					message.embeds = data.embeds;
 
@@ -2214,8 +2265,12 @@
 			});
 		}
 
-		// Use the user-selected terminal from the dropdown
-		const activeTerminalId = $selectedTerminalId ?? null;
+		// Prefer the explicitly selected terminal; otherwise keep the first
+		// available sandbox terminal attached to the request by default.
+		const activeTerminalId = $selectedTerminalId ?? getFallbackTerminalId();
+		if (!$selectedTerminalId && activeTerminalId && (files?.length ?? 0) > 0) {
+			selectedTerminalId.set(activeTerminalId);
+		}
 
 		const res = await generateOpenAIChatCompletion(
 			localStorage.token,
