@@ -1,3 +1,7 @@
+<script context="module" lang="ts">
+	const thinkingStartedAtCache = new Map<string, number>();
+</script>
+
 <script lang="ts">
 	import { getContext } from 'svelte';
 	import { onDestroy, onMount } from 'svelte';
@@ -6,6 +10,7 @@
 
 	export let text: string | null = null;
 	export let startedAt: number | string | null = null;
+	export let cacheKey: string | null = null;
 
 	let elapsedSeconds = 0;
 	let currentStartedAt = Math.floor(Date.now() / 1000);
@@ -15,17 +20,33 @@
 
 	const nowInSeconds = () => Math.floor(Date.now() / 1000);
 
-	const normalizeStartedAt = (value: number | string | null) => {
+	const normalizeStartedAt = (value: number | string | null, key: string | null) => {
 		const numericValue =
 			typeof value === 'string' && value.trim() !== '' ? Number(value) : value;
 
 		if (!numericValue || !Number.isFinite(numericValue) || numericValue <= 0) {
+			if (key && thinkingStartedAtCache.has(key)) {
+				return thinkingStartedAtCache.get(key) ?? nowInSeconds();
+			}
 			return nowInSeconds();
 		}
 
-		return numericValue > 1_000_000_000_000
+		const normalized =
+			numericValue > 1_000_000_000_000
 			? Math.floor(numericValue / 1000)
 			: Math.floor(numericValue);
+
+		if (key) {
+			const cached = thinkingStartedAtCache.get(key);
+			const stableStartedAt =
+				typeof cached === 'number' && Number.isFinite(cached)
+					? Math.min(cached, normalized)
+					: normalized;
+			thinkingStartedAtCache.set(key, stableStartedAt);
+			return stableStartedAt;
+		}
+
+		return normalized;
 	};
 
 	const formatElapsed = (seconds: number) => {
@@ -66,7 +87,7 @@
 	}
 
 	$: {
-		const nextStartedAt = normalizeStartedAt(startedAt);
+		const nextStartedAt = normalizeStartedAt(startedAt, cacheKey);
 		if (nextStartedAt !== currentStartedAt) {
 			currentStartedAt = nextStartedAt;
 			syncElapsed();

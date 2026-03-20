@@ -51,6 +51,21 @@ def _normalize_assistant_artifact_message(message: dict) -> dict:
         return message
 
     normalized = {**message}
+    if isinstance(normalized.get("statusHistory"), list):
+        normalized["statusHistory"] = [
+            (
+                {
+                    **item,
+                    "hidden": True,
+                }
+                if isinstance(item, dict)
+                and item.get("action")
+                in {"artifact_uploaded", "download_artifact", "view_image"}
+                else item
+            )
+            for item in normalized["statusHistory"]
+        ]
+
     files = list(normalized.get("files") or [])
     if not files:
         files = _artifact_files_from_status_history(normalized.get("statusHistory"))

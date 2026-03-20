@@ -30,6 +30,7 @@
 		copyToClipboard as _copyToClipboard,
 		approximateToHumanReadable,
 		getMessageContentParts,
+		sanitizeAssistantDisplayContent,
 		sanitizeResponseContent,
 		createMessagesList,
 		formatDate,
@@ -83,6 +84,8 @@
 			query?: string;
 		};
 		done: boolean;
+		pseudoDone?: boolean;
+		pseudoDoneDurationSeconds?: number;
 		error?: boolean | { content: string };
 		sources?: string[];
 		code_executions?: {
@@ -129,6 +132,61 @@
 	let lastPlaybackAt = 0;
 	let playbackCarry = 0;
 	let playbackBufferStartedAt = 0;
+
+	const extractReasoningMetadata = (content: string) => {
+		if (typeof content !== 'string' || !content.includes('type="reasoning"')) {
+			return null;
+		}
+
+		const detailMatch = content.match(
+			/<details\b(?=[^>]*\btype="reasoning")[^>]*>[\s\S]*?<\/details>/i
+		)?.[0];
+
+		if (!detailMatch) {
+			return null;
+		}
+
+		const startedAt = detailMatch.match(/\bstarted_at="([^"]+)"/i)?.[1] ?? null;
+		const durationAttr = detailMatch.match(/\bduration="(\d+)"/i)?.[1];
+		const done = /\bdone="true"/i.test(detailMatch);
+		const summary = detailMatch.match(/<summary>([\s\S]*?)<\/summary>/i)?.[1] ?? '';
+
+		let duration = durationAttr ? Number(durationAttr) : null;
+		if (duration === null) {
+			if (/less than a second/i.test(summary)) {
+				duration = 0;
+			} else {
+				const secondsMatch = summary.match(/(\d+)\s+seconds?/i);
+				duration = secondsMatch ? Number(secondsMatch[1]) : null;
+			}
+		}
+
+		return {
+			startedAt,
+			duration,
+			done
+		};
+	};
+
+	const formatThoughtSummary = (durationInSeconds: number | null) => {
+		if (durationInSeconds === null || Number.isNaN(durationInSeconds)) {
+			return $i18n.t('Thinking...');
+		}
+
+		if (durationInSeconds < 1) {
+			return $i18n.t('Thought for less than a second');
+		}
+
+		if (durationInSeconds < 60) {
+			return $i18n.t('Thought for {{DURATION}} seconds', {
+				DURATION: durationInSeconds
+			});
+		}
+
+		return $i18n.t('Thought for {{DURATION}}', {
+			DURATION: dayjs.duration(durationInSeconds, 'seconds').humanize()
+		});
+	};
 
 	export let siblings;
 
@@ -202,6 +260,39 @@
 		nextMessage.done = isSmoothStreamingEnabled() ? visibleDone : targetDone;
 		message = nextMessage;
 	};
+
+	$: renderedContent =
+		typeof message?.content === 'string'
+			? sanitizeAssistantDisplayContent(
+					message.content,
+					(message?.done ?? false) ||
+						/<details\b(?=[^>]*\btype="reasoning")[^>]*\bdone="true"/i.test(message.content)
+				)
+			: message?.content;
+	$: targetReasoningMetadata =
+		typeof targetContent === 'string' ? extractReasoningMetadata(targetContent) : null;
+	$: pseudoDoneDurationSeconds =
+		typeof message?.pseudoDoneDurationSeconds === 'number'
+			? message.pseudoDoneDurationSeconds
+			: typeof latestSourceMessage?.pseudoDoneDurationSeconds === 'number'
+				? latestSourceMessage.pseudoDoneDurationSeconds
+				: null;
+	$: effectiveReasoningDone = (targetDone ?? false) || (targetReasoningMetadata?.done ?? false);
+	$: hasVisibleReasoningDetails =
+		typeof renderedContent === 'string' &&
+		/<details\b(?=[^>]*\btype="reasoning")[^>]*>/i.test(renderedContent);
+	$: shouldShowFallbackThinking =
+		!hasVisibleReasoningDetails &&
+		(!effectiveReasoningDone || !!targetReasoningMetadata || pseudoDoneDurationSeconds !== null);
+	$: fallbackThinkingStartedAt =
+		targetReasoningMetadata?.startedAt ??
+		message.timestamp ??
+		null;
+	$: fallbackThoughtSummary = formatThoughtSummary(
+		targetReasoningMetadata?.duration ?? pseudoDoneDurationSeconds ?? null
+	);
+	$: imageAltText =
+		typeof renderedContent === 'string' ? removeAllDetails(renderedContent).trim() : '';
 
 	const getPlaybackCharsPerSecond = (queuedChars: number, done: boolean) => {
 		const baseRate = 54;
@@ -310,7 +401,8 @@
 		latestSourceMessage = structuredClone(source);
 
 		const nextTargetContent = source.content ?? '';
-		const nextTargetDone = source.done ?? false;
+		const nextTargetDone =
+			(source.done ?? false) || (extractReasoningMetadata(nextTargetContent)?.done ?? false);
 		const smoothStreamingEnabled = isSmoothStreamingEnabled();
 
 		if (nextTargetContent !== targetContent) {
@@ -845,30 +937,6 @@
 							<StatusHistory statusHistory={message?.statusHistory} />
 						{/if}
 
-						{#if message?.files && message.files.length > 0}
-							<div
-								class="my-1 w-full flex overflow-x-auto gap-2 flex-wrap"
-								dir={$settings?.chatDirection ?? 'auto'}
-							>
-								{#each message.files as file}
-									<div>
-										{#if file.type === 'image' || (file?.content_type ?? '').startsWith('image/')}
-											<Image src={file.url} alt={message.content} />
-										{:else}
-											<FileItem
-												item={file}
-												url={file.url}
-												name={file.name}
-												type={file.type}
-												size={file?.size}
-												small={true}
-											/>
-										{/if}
-									</div>
-								{/each}
-							</div>
-						{/if}
-
 						{#if message?.embeds && message.embeds.length > 0}
 							<div
 								class="my-1 w-full flex overflow-x-auto gap-2 flex-wrap"
@@ -961,9 +1029,24 @@
 							class="w-full flex flex-col relative {edit ? 'hidden' : ''}"
 							id="response-content-container"
 						>
-							{#if message.content === '' && !message.error && ((model?.info?.meta?.capabilities?.status_updates ?? true) ? (message?.statusHistory ?? [...(message?.status ? [message?.status] : [])]).length === 0 || (message?.statusHistory?.at(-1)?.hidden ?? false) : true)}
-								<ThinkingIndicator startedAt={message.timestamp ?? null} />
-							{:else if message.content && message.error !== true}
+							{#if shouldShowFallbackThinking && !message.error}
+								<div class="mb-1">
+									{#if effectiveReasoningDone}
+										<div
+											class="inline-flex min-h-12 items-center text-base font-normal tracking-[0.04em] text-gray-500 dark:text-gray-400"
+										>
+											{fallbackThoughtSummary}
+										</div>
+									{:else}
+										<ThinkingIndicator
+											startedAt={fallbackThinkingStartedAt}
+											cacheKey={message.id}
+										/>
+									{/if}
+								</div>
+							{/if}
+
+							{#if message.content && message.error !== true}
 								<!-- always show message contents even if there's an error -->
 								<!-- unless message.error === true which is legacy error handling, where the error message is stored in message.content -->
 								<ContentRenderer
@@ -971,7 +1054,7 @@
 									messageId={message.id}
 									{history}
 									{selectedModels}
-									content={message.content}
+									content={renderedContent}
 									sources={message.sources}
 									floatingButtons={message?.done &&
 										!readOnly &&
@@ -1021,11 +1104,35 @@
 								/>
 							{/if}
 
-							{#if message.code_executions}
-								<CodeExecutions codeExecutions={message.code_executions} />
-							{/if}
+								{#if message.code_executions}
+									<CodeExecutions codeExecutions={message.code_executions} />
+								{/if}
+
+								{#if message?.files && message.files.length > 0}
+									<div
+										class="my-2 w-full flex overflow-x-auto gap-2 flex-wrap"
+										dir={$settings?.chatDirection ?? 'auto'}
+									>
+										{#each message.files as file}
+											<div>
+												{#if file.type === 'image' || (file?.content_type ?? '').startsWith('image/')}
+													<Image src={file.url} alt={imageAltText} />
+												{:else}
+													<FileItem
+														item={file}
+														url={file.url}
+														name={file.name}
+														type={file.type}
+														size={file?.size}
+														small={true}
+													/>
+												{/if}
+											</div>
+										{/each}
+									</div>
+								{/if}
+							</div>
 						</div>
-					</div>
 				</div>
 
 				{#if !edit}

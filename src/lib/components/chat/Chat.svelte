@@ -58,6 +58,8 @@
 		getPromptVariables,
 		processDetails,
 		removeAllDetails,
+		sanitizeAssistantDisplayContent,
+		cleanText,
 		getCodeBlockContents,
 		isYoutubeUrl,
 		displayFileHandler
@@ -165,6 +167,10 @@
 	let taskIds = null;
 	let pendingStreamMessagePatches = new Map();
 	let pendingStreamMessageFrames = new Map();
+	let visualCompletionTimers = new Map();
+	let visualCompletionCapTimers = new Map();
+	let lastVisibleAssistantTexts = new Map();
+	let firstVisibleAssistantTextAt = new Map();
 
 	// Chat Input
 	let prompt = '';
@@ -518,6 +524,7 @@
 						action: 'artifact_uploaded',
 						description: 'Generated file',
 						done: true,
+						hidden: true,
 						files: newFiles
 					};
 					if (message?.statusHistory) {
@@ -541,6 +548,210 @@
 		history.messages[messageId] = normalizeArtifactMessage(message);
 	};
 
+	const clearVisualCompletionTimer = (messageId) => {
+		const timer = visualCompletionTimers.get(messageId);
+		if (timer) {
+			clearTimeout(timer);
+			visualCompletionTimers.delete(messageId);
+		}
+	};
+
+	const clearVisualCompletionCapTimer = (messageId) => {
+		const timer = visualCompletionCapTimers.get(messageId);
+		if (timer) {
+			clearTimeout(timer);
+			visualCompletionCapTimers.delete(messageId);
+		}
+	};
+
+	const clearVisualCompletionTracking = (messageId) => {
+		clearVisualCompletionTimer(messageId);
+		clearVisualCompletionCapTimer(messageId);
+		lastVisibleAssistantTexts.delete(messageId);
+		firstVisibleAssistantTextAt.delete(messageId);
+	};
+
+	const getVisibleAssistantText = (message) => {
+		if (!message || typeof message.content !== 'string') {
+			return '';
+		}
+
+		const renderedContent = sanitizeAssistantDisplayContent(message.content, false);
+
+		return cleanText(
+			removeAllDetails(processDetails(renderedContent))
+			.replace(/<details[^>]*>[\s\S]*$/gi, ' ')
+			.replace(/<\/?summary[^>]*>/gi, ' ')
+			.replace(/<[^>]+>/g, ' ')
+			.replace(/&nbsp;/g, ' ')
+			.replace(/\s+/g, ' ')
+			.trim()
+		);
+	};
+
+	const hasPendingStructuredToolActivity = (message) => {
+		if (!message) {
+			return false;
+		}
+
+		if (typeof message.content === 'string') {
+			if (
+				/<details\b(?=[^>]*\btype="tool_calls")[^>]*\bdone="false"/i.test(message.content) ||
+				/<details\b(?=[^>]*\btype="code_interpreter")[^>]*\bdone="false"/i.test(
+					message.content
+				)
+			) {
+				return true;
+			}
+		}
+
+		if (Array.isArray(message.output)) {
+			return message.output.some((item) => {
+				if (!item || typeof item !== 'object') {
+					return false;
+				}
+
+				return (
+					(item.type === 'function_call' || item.type === 'open_webui:code_interpreter') &&
+					item.status === 'in_progress'
+				);
+			});
+		}
+
+		return false;
+	};
+
+	const canVisuallyCompleteAssistantMessage = (message) => {
+		if (!message || message.role !== 'assistant' || message.error) {
+			return false;
+		}
+
+		if (getVisibleAssistantText(message).length === 0) {
+			return false;
+		}
+
+		if (hasPendingStructuredToolActivity(message)) {
+			return false;
+		}
+
+		if (message?.code_executions?.some((execution) => execution?.status !== 'completed')) {
+			return false;
+		}
+
+		return true;
+	};
+
+	const scheduleVisualCompletionIfIdle = (messageId) => {
+		clearVisualCompletionTimer(messageId);
+
+		visualCompletionTimers.set(
+			messageId,
+			window.setTimeout(() => {
+				visualCompletionTimers.delete(messageId);
+
+				const currentMessage = history.messages[messageId];
+				if (!canVisuallyCompleteAssistantMessage(currentMessage) || currentMessage?.done === true) {
+					return;
+				}
+
+				const durationSeconds = Math.max(
+					1,
+					Math.floor(Date.now() / 1000) - Math.floor(currentMessage.timestamp ?? Date.now() / 1000)
+				);
+
+				history.messages[messageId] = {
+					...currentMessage,
+					done: true,
+					pseudoDone: true,
+					pseudoDoneDurationSeconds: durationSeconds
+				};
+
+				if (history.currentId === messageId) {
+					taskIds = null;
+					generating = false;
+					generationController = null;
+				}
+			}, 900)
+		);
+	};
+
+	const forceVisualCompletion = (messageId, message) => {
+		if (!message || message.done === true) {
+			return false;
+		}
+
+		const durationSeconds = Math.max(
+			1,
+			Math.floor(Date.now() / 1000) - Math.floor(message.timestamp ?? Date.now() / 1000)
+		);
+
+		history.messages[messageId] = {
+			...message,
+			done: true,
+			pseudoDone: true,
+			pseudoDoneDurationSeconds: durationSeconds
+		};
+
+		if (history.currentId === messageId) {
+			taskIds = null;
+			generating = false;
+			generationController = null;
+		}
+
+		return true;
+	};
+
+	const scheduleVisualCompletionCap = (messageId) => {
+		if (visualCompletionCapTimers.has(messageId)) {
+			return;
+		}
+
+		visualCompletionCapTimers.set(
+			messageId,
+			window.setTimeout(() => {
+				visualCompletionCapTimers.delete(messageId);
+
+				const currentMessage = history.messages[messageId];
+				const visibleText = getVisibleAssistantText(currentMessage);
+				if (
+					!canVisuallyCompleteAssistantMessage(currentMessage) ||
+					currentMessage?.done === true ||
+					visibleText.length === 0 ||
+					visibleText.length > 240
+				) {
+					return;
+				}
+
+				forceVisualCompletion(messageId, currentMessage);
+			}, 2500)
+		);
+	};
+
+	const maybeScheduleVisualCompletion = (message) => {
+		if (!canVisuallyCompleteAssistantMessage(message) || message?.done === true) {
+			return false;
+		}
+
+		const nextVisibleText = getVisibleAssistantText(message);
+		if (nextVisibleText.length === 0) {
+			return false;
+		}
+
+		const now = Date.now();
+		if (!firstVisibleAssistantTextAt.has(message.id)) {
+			firstVisibleAssistantTextAt.set(message.id, now);
+			scheduleVisualCompletionCap(message.id);
+		}
+
+		const previousVisibleText = lastVisibleAssistantTexts.get(message.id) ?? '';
+		if (nextVisibleText !== previousVisibleText || !visualCompletionTimers.has(message.id)) {
+			lastVisibleAssistantTexts.set(message.id, nextVisibleText);
+			scheduleVisualCompletionIfIdle(message.id);
+		}
+
+		return true;
+	};
+
 	const scheduleStreamMessagePatch = (messageId, patch, force = false) => {
 		const pending = pendingStreamMessagePatches.get(messageId) ?? {};
 		pendingStreamMessagePatches.set(messageId, { ...pending, ...patch });
@@ -559,17 +770,51 @@
 		}
 	};
 
+	$: {
+		const currentMessage = history?.messages?.[history?.currentId];
+		if (currentMessage?.role === 'assistant' && currentMessage?.done !== true) {
+			maybeScheduleVisualCompletion(currentMessage);
+		}
+	}
+
 	const chatEventHandler = async (event, cb) => {
 		console.log(event);
 
 		if (event.chat_id === $chatId) {
 			await tick();
+			const type = event?.data?.type ?? null;
+			const data = event?.data?.data ?? null;
+
+				if (type === 'chat:active') {
+					const active = data?.active ?? false;
+
+					if (!active) {
+						clearVisualCompletionTracking(event.message_id);
+						taskIds = null;
+						generating = false;
+					generationController = null;
+
+					const currentMessage = history.messages[event.message_id];
+					if (currentMessage?.role === 'assistant' && currentMessage.done !== true) {
+						const synced = await syncChatFromServer(event.chat_id, {
+							focusMessageId: event.message_id,
+							emitFinish: true
+						});
+
+						if (!synced && history.messages[event.message_id]) {
+							history.messages[event.message_id].done = true;
+						}
+					}
+
+					await processQueuedMessagesIfIdle();
+				}
+
+				return;
+			}
+
 			let message = history.messages[event.message_id];
 
 			if (message) {
-				const type = event?.data?.type ?? null;
-				const data = event?.data?.data ?? null;
-
 				if (type === 'status') {
 					if (message?.statusHistory) {
 						message.statusHistory.push(data);
@@ -579,6 +824,7 @@
 				} else if (type === 'chat:completion') {
 					chatCompletionEventHandler(data, message, event.chat_id);
 				} else if (type === 'chat:tasks:cancel') {
+					clearVisualCompletionTracking(event.message_id);
 					taskIds = null;
 					const responseMessage = history.messages[history.currentId];
 					// Set all response messages to done
@@ -610,6 +856,7 @@
 							action: 'artifact_uploaded',
 							description: 'Generated file',
 							done: true,
+							hidden: true,
 							files: nextFiles
 						};
 						if (message?.statusHistory) {
@@ -923,6 +1170,10 @@
 
 		return () => {
 			try {
+				for (const timer of visualCompletionTimers.values()) {
+					clearTimeout(timer);
+				}
+				visualCompletionTimers.clear();
 				pageSubscribe();
 				showControlsSubscribe();
 				selectedFolderSubscribe();
@@ -1554,6 +1805,23 @@
 			...message
 		};
 
+		if (Array.isArray(normalizedMessage.statusHistory)) {
+			normalizedMessage.statusHistory = normalizedMessage.statusHistory.map((item) => {
+				if (!item || typeof item !== 'object') {
+					return item;
+				}
+
+				if (['artifact_uploaded', 'download_artifact', 'view_image'].includes(item.action)) {
+					return {
+						...item,
+						hidden: true
+					};
+				}
+
+				return item;
+			});
+		}
+
 		const artifactFiles =
 			normalizedMessage.files?.length > 0
 				? normalizedMessage.files
@@ -1606,6 +1874,104 @@
 		}
 
 		return normalizedMessage;
+	};
+
+	const normalizeLoadedHistory = (_history) => {
+		if (!_history?.messages) {
+			return _history;
+		}
+
+		const normalizedHistory = {
+			..._history,
+			messages: { ..._history.messages }
+		};
+
+		for (const [messageId, message] of Object.entries(normalizedHistory.messages)) {
+			const normalizedMessage = normalizeArtifactMessage(message);
+			normalizedHistory.messages[messageId] =
+				normalizedMessage?.role === 'assistant'
+					? { ...normalizedMessage, done: true }
+					: normalizedMessage;
+		}
+
+		return normalizedHistory;
+	};
+
+	const processQueuedMessagesIfIdle = async () => {
+		if (taskIds !== null && taskIds.length > 0) {
+			return;
+		}
+
+		if (messageQueue.length === 0) {
+			return;
+		}
+
+		const combinedPrompt = messageQueue.map((m) => m.prompt).join('\n\n');
+		const combinedFiles = messageQueue.flatMap((m) => m.files);
+		messageQueue = [];
+
+		files = combinedFiles;
+		await tick();
+		await submitPrompt(combinedPrompt);
+	};
+
+	const syncChatFromServer = async (
+		_chatId,
+		{ focusMessageId = null, emitFinish = false }: { focusMessageId?: string | null; emitFinish?: boolean } = {}
+	) => {
+		if (
+			!_chatId ||
+			typeof _chatId !== 'string' ||
+			_chatId.startsWith('local:') ||
+			$chatId !== _chatId
+		) {
+			return false;
+		}
+
+		const latestChat = await getChatById(localStorage.token, _chatId).catch(() => null);
+		const chatContent = latestChat?.chat;
+
+		if (!chatContent) {
+			return false;
+		}
+
+		const nextHistory = normalizeLoadedHistory(
+			(chatContent?.history ?? undefined) !== undefined
+				? chatContent.history
+				: convertMessagesToHistory(chatContent.messages)
+		);
+
+		if (!nextHistory) {
+			return false;
+		}
+
+		history = nextHistory;
+		if (focusMessageId && history.messages[focusMessageId]) {
+			history.currentId = focusMessageId;
+		}
+
+		chat = latestChat;
+		chatTitle.set(chatContent.title);
+		chatFiles = chatContent?.files ?? chatFiles;
+
+		if (emitFinish && focusMessageId && history.messages[focusMessageId]) {
+			const finalMessage = history.messages[focusMessageId];
+			eventTarget.dispatchEvent(
+				new CustomEvent('chat:finish', {
+					detail: {
+						id: finalMessage.id,
+						content: finalMessage.content ?? ''
+					}
+				})
+			);
+		}
+
+		await tick();
+		if (autoScroll) {
+			scheduleScrollToBottom();
+		}
+
+		return true;
 	};
 
 	const mergeHistoryMessage = (existingMessage, incomingMessage) => {
@@ -1725,18 +2091,7 @@
 		}
 
 		taskIds = null;
-
-		// Process message queue - combine all queued messages and submit at once
-		if (messageQueue.length > 0) {
-			const combinedPrompt = messageQueue.map((m) => m.prompt).join('\n\n');
-			const combinedFiles = messageQueue.flatMap((m) => m.files);
-			messageQueue = [];
-
-			// Set the files and submit
-			files = combinedFiles;
-			await tick();
-			await submitPrompt(combinedPrompt);
-		}
+		await processQueuedMessagesIfIdle();
 	};
 
 	const chatActionHandler = async (_chatId, actionId, modelId, responseMessageId, event = null) => {
@@ -1982,10 +2337,40 @@
 			history.messages[message.id] = message;
 		}
 
+		let candidateMessage = normalizeArtifactMessage({
+			...(history.messages[message.id] ?? {}),
+			...message,
+			...(content !== undefined ? { content } : {}),
+			...(output !== undefined ? { output } : {}),
+			...(usage !== undefined ? { usage } : {})
+		});
+
+		if (message?.pseudoDone && !done) {
+			const previousVisibleText =
+				lastVisibleAssistantTexts.get(message.id) ??
+				getVisibleAssistantText(history.messages[message.id] ?? message);
+			const nextVisibleText = getVisibleAssistantText(candidateMessage);
+			const shouldReopenPseudoDone =
+				!canVisuallyCompleteAssistantMessage(candidateMessage) ||
+				nextVisibleText !== previousVisibleText;
+
+			candidateMessage = {
+				...candidateMessage,
+				done: !shouldReopenPseudoDone,
+				pseudoDone: !shouldReopenPseudoDone
+			};
+
+			message.done = candidateMessage.done;
+			message.pseudoDone = candidateMessage.pseudoDone;
+			history.messages[message.id] = candidateMessage;
+		}
+
 		if (done) {
+			clearVisualCompletionTracking(message.id);
 			flushPendingStreamMessagePatch(message.id);
 			message = history.messages[message.id] ?? message;
 			message.done = true;
+			message.pseudoDone = false;
 
 			if ($settings.responseAutoCopy) {
 				copyToClipboard(message.content);
@@ -2033,6 +2418,10 @@
 				message.id,
 				createMessagesList(history, message.id)
 			);
+		} else {
+			if (!maybeScheduleVisualCompletion(candidateMessage)) {
+				clearVisualCompletionTimer(message.id);
+			}
 		}
 
 		console.log(data);

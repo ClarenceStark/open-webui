@@ -918,6 +918,104 @@ export const processDetails = (content) => {
 	return content;
 };
 
+const REASONING_DETAILS_REGEX = /<details\b(?=[^>]*\btype="reasoning")[^>]*>[\s\S]*?<\/details>/gi;
+
+const extractDurationFromReasoningDetail = (detail: string) => {
+	const durationAttr = detail.match(/\bduration="(\d+)"/i);
+	if (durationAttr) {
+		return Number(durationAttr[1] ?? 0);
+	}
+
+	const summary = detail.match(/<summary>([\s\S]*?)<\/summary>/i)?.[1] ?? '';
+	if (/less than a second/i.test(summary)) {
+		return 0;
+	}
+
+	const secondsMatch = summary.match(/(\d+)\s+seconds?/i);
+	if (secondsMatch) {
+		return Number(secondsMatch[1] ?? 0);
+	}
+
+	return 0;
+};
+
+const collectReasoningDetails = (content: string) => {
+	if (typeof content !== 'string' || !content.includes('type="reasoning"')) {
+		return null;
+	}
+
+	const matches = Array.from(content.matchAll(REASONING_DETAILS_REGEX));
+	if (matches.length === 0) {
+		return null;
+	}
+
+	const totalDuration = matches.reduce(
+		(sum, match) => sum + extractDurationFromReasoningDetail(match[0] ?? ''),
+		0
+	);
+
+	const startedAt =
+		matches
+			.map((match) => match[0]?.match(/\bstarted_at="([^"]+)"/i)?.[1] ?? null)
+			.filter(Boolean)
+			.at(0) ?? null;
+
+	const bodies = matches
+		.map((match) =>
+			(match[0] ?? '')
+				.replace(/<summary>[\s\S]*?<\/summary>/i, '')
+				.replace(/^(\s|\n)+|(\s|\n)+$/g, '')
+		)
+			.filter(Boolean);
+
+	return {
+		matches,
+		totalDuration,
+		startedAt,
+		bodies
+	};
+};
+
+const collapseReasoningDetailsForDisplay = (content: string, done: boolean) => {
+	const collected = collectReasoningDetails(content);
+	if (!collected) {
+		return content;
+	}
+
+	const { matches, totalDuration, startedAt, bodies } = collected;
+	if (done && matches.length <= 1) {
+		return content;
+	}
+
+	const startedAtAttr = startedAt ? ` started_at="${startedAt}"` : '';
+	const mergedBody = bodies.length > 0 ? `\n${bodies.join('\n\n')}\n` : '\n';
+	const mergedDetail = done
+		? `<details type="reasoning" done="true" duration="${totalDuration}"${startedAtAttr}>` +
+			`\n<summary>Thought for ${totalDuration} seconds</summary>` +
+			`${mergedBody}</details>`
+		: `<details type="reasoning" done="false"${startedAtAttr}>` +
+			`\n<summary>Thinking…</summary>` +
+			`${mergedBody}</details>`;
+
+	return content.replace(REASONING_DETAILS_REGEX, (match, offset) => {
+		return offset === (matches[0]?.index ?? 0) ? mergedDetail : '';
+	});
+};
+
+export const sanitizeAssistantDisplayContent = (content: string, done: boolean = true) => {
+	if (typeof content !== 'string' || content.length === 0) {
+		return content;
+	}
+
+	let sanitized = collapseReasoningDetailsForDisplay(content, done);
+	sanitized = sanitized.replace(
+		/<details\b(?=[^>]*\btype="tool_calls")[^>]*>[\s\S]*?<\/details>/gi,
+		''
+	);
+
+	return sanitized;
+};
+
 // This regular expression matches code blocks marked by triple backticks
 const codeBlockRegex = /```[\s\S]*?```/g;
 

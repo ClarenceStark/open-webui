@@ -807,6 +807,9 @@ def build_tool_execution_status(
         "done": done,
     }
 
+    if tool_name in {"download_artifact", "view_image"}:
+        status["hidden"] = True
+
     parsed_result = tool_result
     if isinstance(tool_result, tuple) and len(tool_result) >= 1:
         parsed_result = tool_result[0]
@@ -1135,6 +1138,55 @@ def serialize_output(output: list) -> str:
     For LLM consumption, use convert_output_to_messages() instead.
     """
     content = ""
+    hidden_tool_call_names = {"download_artifact", "view_image"}
+    aggregated_reasoning_duration = 0
+    aggregated_reasoning_texts = []
+    aggregated_reasoning_started_at = None
+    aggregated_reasoning_rendered = False
+
+    def tool_result_has_error(result_text: str) -> bool:
+        if not result_text:
+            return False
+
+        try:
+            parsed = json.loads(result_text)
+            if isinstance(parsed, dict):
+                return bool(parsed.get("error"))
+        except Exception:
+            pass
+
+        lowered = result_text.lower()
+        return lowered.startswith("error") or '"error"' in lowered or "\nerror:" in lowered
+
+    def build_reasoning_display(reasoning_text: str) -> str:
+        return html.escape(
+            "\n".join(
+                (f"> {line}" if not line.startswith(">") else line)
+                for line in reasoning_text.splitlines()
+            )
+        )
+
+    def render_aggregated_reasoning() -> None:
+        nonlocal content
+        nonlocal aggregated_reasoning_rendered
+
+        if aggregated_reasoning_rendered:
+            return
+
+        if aggregated_reasoning_duration <= 0 and not aggregated_reasoning_texts:
+            return
+
+        if content and not content.endswith("\n"):
+            content += "\n"
+
+        started_at_attr = (
+            f' started_at="{aggregated_reasoning_started_at}"'
+            if aggregated_reasoning_started_at is not None
+            else ""
+        )
+        display = build_reasoning_display("\n\n".join(aggregated_reasoning_texts).strip())
+        content += f'<details type="reasoning" done="true" duration="{aggregated_reasoning_duration}"{started_at_attr}>\n<summary>Thought for {aggregated_reasoning_duration} seconds</summary>\n{display}\n</details>\n'
+        aggregated_reasoning_rendered = True
 
     # First pass: collect function_call_output items by call_id for lookup
     tool_outputs = {}
@@ -1147,6 +1199,14 @@ def serialize_output(output: list) -> str:
         item_type = item.get("type", "")
 
         if item_type == "message":
+            message_has_text = any(
+                content_part.get("text", "").strip()
+                for content_part in item.get("content", [])
+                if isinstance(content_part, dict) and "text" in content_part
+            )
+            if message_has_text:
+                render_aggregated_reasoning()
+
             for content_part in item.get("content", []):
                 if "text" in content_part:
                     text = content_part.get("text", "").strip()
@@ -1176,6 +1236,9 @@ def serialize_output(output: list) -> str:
                 files = result_item.get("files")
                 embeds = result_item.get("embeds", "")
 
+                if name in hidden_tool_call_names and not tool_result_has_error(result_text):
+                    continue
+
                 content += f'<details type="tool_calls" done="true" id="{call_id}" name="{name}" arguments="{html.escape(json.dumps(arguments))}" result="{html.escape(json.dumps(result_text, ensure_ascii=False))}" files="{html.escape(json.dumps(files)) if files else ""}" embeds="{html.escape(json.dumps(embeds))}">\n<summary>Tool Executed</summary>\n</details>\n'
             else:
                 content += f'<details type="tool_calls" done="false" id="{call_id}" name="{name}" arguments="{html.escape(json.dumps(arguments))}">\n<summary>Executing...</summary>\n</details>\n'
@@ -1199,28 +1262,34 @@ def serialize_output(output: list) -> str:
             duration = item.get("duration")
             status = item.get("status", "in_progress")
             started_at = item.get("started_at")
-            started_at_attr = (
-                f' started_at="{started_at}"' if started_at is not None else ""
-            )
 
             # Infer completion: if this reasoning item is NOT the last item,
             # render as done (a subsequent item means reasoning is complete)
             is_last_item = idx == len(output) - 1
 
-            if content and not content.endswith("\n"):
-                content += "\n"
-
-            display = html.escape(
-                "\n".join(
-                    (f"> {line}" if not line.startswith(">") else line)
-                    for line in reasoning_content.splitlines()
-                )
-            )
-
             if status == "completed" or duration is not None or not is_last_item:
-                content = f'{content}<details type="reasoning" done="true" duration="{duration or 0}"{started_at_attr}>\n<summary>Thought for {duration or 0} seconds</summary>\n{display}\n</details>\n'
+                aggregated_reasoning_duration += int(duration or 0)
+                if reasoning_content:
+                    aggregated_reasoning_texts.append(reasoning_content)
+                if started_at is not None:
+                    try:
+                        started_at_value = float(started_at)
+                        if (
+                            aggregated_reasoning_started_at is None
+                            or started_at_value < aggregated_reasoning_started_at
+                        ):
+                            aggregated_reasoning_started_at = int(started_at_value)
+                    except (TypeError, ValueError):
+                        pass
             else:
-                content = f'{content}<details type="reasoning" done="false"{started_at_attr}>\n<summary>Thinking…</summary>\n{display}\n</details>\n'
+                if content and not content.endswith("\n"):
+                    content += "\n"
+
+                started_at_attr = (
+                    f' started_at="{started_at}"' if started_at is not None else ""
+                )
+                display = build_reasoning_display(reasoning_content)
+                content += f'<details type="reasoning" done="false"{started_at_attr}>\n<summary>Thinking…</summary>\n{display}\n</details>\n'
 
         elif item_type == "web_search_call":
             if content and not content.endswith("\n"):
@@ -1297,6 +1366,8 @@ def serialize_output(output: list) -> str:
                 content += f'<details type="code_interpreter" done="true" duration="{duration or 0}"{output_attr}>\n<summary>Analyzed</summary>\n{display}\n</details>\n'
             else:
                 content += f'<details type="code_interpreter" done="false"{output_attr}>\n<summary>Analyzing…</summary>\n{display}\n</details>\n'
+
+    render_aggregated_reasoning()
 
     return content.strip()
 

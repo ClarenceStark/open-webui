@@ -6,6 +6,8 @@
 	export let statusHistory = [];
 	export let expand = false;
 
+	const HIDDEN_STATUS_ACTIONS = new Set(['artifact_uploaded', 'download_artifact', 'view_image']);
+
 	let showHistory = true;
 
 	$: if (expand) {
@@ -17,20 +19,28 @@
 	let history = [];
 	let status = null;
 
+	const isVisibleStatus = (item) =>
+		item && item.hidden !== true && !HIDDEN_STATUS_ACTIONS.has(item.action);
+	let visibleStatusHistory = [];
+
 	$: if (history && history.length > 0) {
 		status = history.at(-1);
+	} else {
+		status = null;
 	}
 
+	$: visibleStatusHistory = (statusHistory ?? []).filter(isVisibleStatus);
+
 	$: if (
-		statusHistory.length !== history.length ||
-		JSON.stringify(statusHistory) !== JSON.stringify(history)
+		visibleStatusHistory.length !== history.length ||
+		JSON.stringify(visibleStatusHistory) !== JSON.stringify(history)
 	) {
-		history = statusHistory;
+		history = visibleStatusHistory;
 	}
 </script>
 
 {#if history && history.length > 0}
-	{#if status?.hidden !== true}
+	{#if status}
 		<div class="text-sm flex flex-col w-full">
 			<button
 				class="w-full"
