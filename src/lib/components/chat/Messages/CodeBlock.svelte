@@ -1,7 +1,7 @@
 <script lang="ts">
 	import hljs from 'highlight.js';
 	import { toast } from 'svelte-sonner';
-	import { getContext, onMount, tick, onDestroy } from 'svelte';
+	import { getContext, onMount, onDestroy } from 'svelte';
 	import { config } from '$lib/stores';
 
 	import PyodideWorker from '$lib/workers/pyodide.worker?worker';
@@ -18,11 +18,7 @@
 	import CodeEditor from '$lib/components/common/CodeEditor.svelte';
 	import SvgPanZoom from '$lib/components/common/SVGPanZoom.svelte';
 
-	import ChevronUp from '$lib/components/icons/ChevronUp.svelte';
-	import ChevronUpDown from '$lib/components/icons/ChevronUpDown.svelte';
-	import CommandLine from '$lib/components/icons/CommandLine.svelte';
-	import Cube from '$lib/components/icons/Cube.svelte';
-	import Tooltip from '$lib/components/common/Tooltip.svelte';
+	import Clipboard from '$lib/components/icons/Clipboard.svelte';
 
 	const i18n = getContext('i18n');
 
@@ -74,21 +70,10 @@
 	const CODE_BLOCK_BG = '#2b2b28';
 
 	let copied = false;
-	let saved = false;
-
-	const collapseCodeBlock = () => {
-		collapsed = !collapsed;
-	};
 
 	const saveCode = () => {
-		saved = true;
-
 		code = _code;
 		onSave(code);
-
-		setTimeout(() => {
-			saved = false;
-		}, 1000);
 	};
 
 	const copyCode = async () => {
@@ -98,10 +83,6 @@
 		setTimeout(() => {
 			copied = false;
 		}, 1000);
-	};
-
-	const previewCode = () => {
-		onPreview(code);
 	};
 
 	const checkPythonCode = (str) => {
@@ -422,14 +403,14 @@
 
 <div>
 	<div
-		class="code-block-surface relative {className} flex flex-col rounded-2xl border border-gray-100/30 dark:border-gray-850/30 my-0.5"
-		style="background-color: {CODE_BLOCK_BG};"
+		class="code-block-surface relative {className} flex flex-col rounded-xl border my-0.5"
+		style="background-color: {CODE_BLOCK_BG}; border-width: 0.5px;"
 		dir="ltr"
 	>
 		{#if ['mermaid', 'vega', 'vega-lite'].includes(lang)}
 			{#if renderHTML}
 				<SvgPanZoom
-					className=" rounded-2xl max-h-fit overflow-hidden"
+					className=" rounded-xl max-h-fit overflow-hidden"
 					svg={renderHTML}
 					content={_token.text}
 				/>
@@ -446,90 +427,35 @@
 				</div>
 			{/if}
 		{:else}
-			<div
-				class="sticky {stickyButtonsClassName} left-0 right-0 py-1.5 px-3 gap-2 flex items-center justify-end w-full z-10 text-xs text-neutral-100 rounded-t-2xl"
-				style="background-color: {CODE_BLOCK_BG};"
-			>
-				<div class="flex-1 truncate">
-					<Tooltip content={lang} placement="top-start">
-						<span class=" truncate text-ellipsis">
-							{lang}
-						</span>
-					</Tooltip>
+			{#if lang}
+				<div
+					class="pointer-events-none absolute left-5 top-4 z-10 max-w-[calc(100%-5.5rem)] truncate font-sans text-[13px] font-normal lowercase tracking-normal text-[#a7a39a]"
+				>
+					{lang.toLowerCase()}
 				</div>
+			{/if}
 
-				<div class="flex items-center gap-0.5 shrink-0">
-					<button
-						class="flex gap-1 items-center bg-none border-none transition rounded-md px-1.5 py-0.5 text-neutral-200 hover:bg-white/8"
-						on:click={collapseCodeBlock}
-					>
-						<div class=" -translate-y-[0.5px]">
-							<ChevronUpDown className="size-3" />
-						</div>
-
-						<div>
-							{collapsed ? $i18n.t('Expand') : $i18n.t('Collapse')}
-						</div>
-					</button>
-
-					{#if ($config?.features?.enable_code_execution ?? true) && (lang.toLowerCase() === 'python' || lang.toLowerCase() === 'py' || (lang === '' && checkPythonCode(code)))}
-						{#if executing}
-							<div
-								class="run-code-button bg-none border-none p-0.5 cursor-not-allowed text-neutral-300"
-							>
-								{$i18n.t('Running')}
-							</div>
-						{:else if run}
-							<button
-								class="flex gap-1 items-center run-code-button bg-none border-none transition rounded-md px-1.5 py-0.5 text-neutral-200 hover:bg-white/8"
-								on:click={async () => {
-									code = _code;
-									await tick();
-									executePython(code);
-								}}
-							>
-								<div>
-									{$i18n.t('Run')}
-								</div>
-							</button>
-						{/if}
-					{/if}
-
-					{#if save}
-						<button
-							class="save-code-button bg-none border-none transition rounded-md px-1.5 py-0.5 text-neutral-200 hover:bg-white/8"
-							on:click={saveCode}
-						>
-							{saved ? $i18n.t('Saved') : $i18n.t('Save')}
-						</button>
-					{/if}
-
-					<button
-						class="copy-code-button bg-none border-none transition rounded-md px-1.5 py-0.5 text-neutral-200 hover:bg-white/8"
-						on:click={copyCode}>{copied ? $i18n.t('Copied') : $i18n.t('Copy')}</button
-					>
-
-					{#if preview && ['html', 'svg'].includes(lang)}
-						<button
-							class="flex gap-1 items-center run-code-button bg-none border-none transition rounded-md px-1.5 py-0.5 text-neutral-200 hover:bg-white/8"
-							on:click={previewCode}
-						>
-							<div>
-								{$i18n.t('Preview')}
-							</div>
-						</button>
-					{/if}
-				</div>
+			<div class="code-block-copy-hotspot">
+				<button
+					type="button"
+					class="code-block-copy-button rounded-md p-1 text-neutral-400 transition hover:text-neutral-100 focus-visible:text-neutral-100 {copied
+						? 'text-neutral-100'
+						: ''}"
+					aria-label={copied ? $i18n.t('Copied') : $i18n.t('Copy')}
+					on:click={copyCode}
+				>
+					<Clipboard className="size-4" strokeWidth="1.75" />
+				</button>
 			</div>
 
 			<div
-				class="language-{lang} rounded-t-2xl -mt-8 {editorClassName
+				class="language-{lang} rounded-xl {editorClassName
 					? editorClassName
 					: executing || stdout || stderr || result
 						? ''
-						: 'rounded-b-2xl'} overflow-hidden"
+						: 'rounded-b-xl'} overflow-hidden"
 			>
-				<div class="pt-6.5" style="background-color: {CODE_BLOCK_BG};"></div>
+				<div class="pt-14" style="background-color: {CODE_BLOCK_BG};"></div>
 
 				{#if !collapsed}
 					{#if edit}
@@ -546,20 +472,17 @@
 						/>
 					{:else}
 						<pre
-							class=" hljs p-4 px-5 overflow-x-auto"
-							style="border-top-left-radius: 0px; border-top-right-radius: 0px; {(executing ||
-								stdout ||
-								stderr ||
-								result) &&
+							class="hljs px-5 pb-4 pt-0 overflow-x-auto leading-7"
+							style="{(executing || stdout || stderr || result) &&
 								'border-bottom-left-radius: 0px; border-bottom-right-radius: 0px;'}"><code
-								class="language-{lang} rounded-t-none whitespace-pre text-sm"
+								class="language-{lang} whitespace-pre text-sm leading-7"
 								>{@html hljs.highlightAuto(code, hljs.getLanguage(lang)?.aliases).value ||
 									code}</code
 							></pre>
 					{/if}
 				{:else}
 					<div
-						class="rounded-b-2xl! pt-0.5 pb-2 px-4 flex flex-col gap-2 text-xs text-neutral-100"
+						class="rounded-b-xl! pt-0.5 pb-2 px-4 flex flex-col gap-2 text-xs text-neutral-100"
 						style="background-color: {CODE_BLOCK_BG};"
 					>
 						<span class="text-gray-500 italic">
@@ -572,16 +495,16 @@
 			</div>
 
 			{#if !collapsed}
-				<div
-					id="plt-canvas-{id}"
-					class="dark:text-white max-w-full overflow-x-auto scrollbar-hidden"
-					style="background-color: {CODE_BLOCK_BG};"
-				/>
+					<div
+						id="plt-canvas-{id}"
+						class="dark:text-white max-w-full overflow-x-auto scrollbar-hidden"
+						style="background-color: {CODE_BLOCK_BG};"
+					/>
 
 				{#if executing || stdout || stderr || result || files}
 					<div
-						class="dark:text-white rounded-b-2xl! py-4 px-4 flex flex-col gap-2"
-						style="background-color: {CODE_BLOCK_BG};"
+						class="dark:text-white rounded-b-xl! py-4 px-4 flex flex-col gap-2"
+						style="background-color: {CODE_BLOCK_BG}; border-top: 1px solid rgba(255, 255, 255, 0.08);"
 					>
 						{#if executing}
 							<div class=" ">
@@ -635,5 +558,32 @@
 
 	.code-block-surface :global(.hljs) {
 		color: #f8f8f2;
+	}
+
+	.code-block-surface {
+		border-color: rgba(255, 255, 255, 0.1);
+	}
+
+	.code-block-copy-hotspot {
+		position: absolute;
+		top: 0.35rem;
+		right: 0.35rem;
+		z-index: 20;
+		display: flex;
+		height: 2.5rem;
+		width: 3rem;
+		align-items: flex-start;
+		justify-content: flex-end;
+	}
+
+	.code-block-copy-button {
+		opacity: 0;
+		pointer-events: none;
+	}
+
+	.code-block-copy-hotspot:hover .code-block-copy-button,
+	.code-block-copy-hotspot:focus-within .code-block-copy-button {
+		opacity: 1;
+		pointer-events: auto;
 	}
 </style>

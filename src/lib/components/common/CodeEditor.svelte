@@ -356,4 +356,23 @@ print("${endTag}")
 	.code-editor-host :global(.cm-activeLineGutter) {
 		background-color: #2b2b28 !important;
 	}
+
+	.code-editor-host :global(.cm-gutters) {
+		display: none !important;
+	}
+
+	.code-editor-host :global(.cm-content),
+	.code-editor-host :global(.cm-line),
+	.code-editor-host :global(pre),
+	.code-editor-host :global(code) {
+		line-height: 1.75 !important;
+	}
+
+	.code-editor-host :global(.cm-content) {
+		padding: 0 1.25rem 1rem !important;
+	}
+
+	.code-editor-host :global(.cm-line) {
+		padding: 0 !important;
+	}
 </style>
