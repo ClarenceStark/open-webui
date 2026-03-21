@@ -1,5 +1,10 @@
 <script>
 	import { getContext } from 'svelte';
+	import {
+		getLocalizedToolActionLabel,
+		getLocalizedToolDescriptionLabel,
+		trimTrailingEllipsis
+	} from '../toolStatus';
 
 	import StatusItem from './StatusHistory/StatusItem.svelte';
 
@@ -24,8 +29,6 @@
 			return value;
 		}
 	};
-
-	const trimTrailingEllipsis = (value) => (value ?? '').replace(/(?:\.\.\.|…)\s*$/, '').trim();
 
 	const normalizeToolName = (value) => {
 		switch (value) {
@@ -109,12 +112,14 @@
 			return trimTrailingEllipsis($i18n.t('Searching the web'));
 		}
 
-		if (item?.action === 'open_page') {
-			return trimTrailingEllipsis($i18n.t('Opening page'));
+		const localizedToolDescription = getLocalizedToolDescriptionLabel(item?.description, $i18n.t);
+		if (localizedToolDescription) {
+			return localizedToolDescription;
 		}
 
-		if (item?.action === 'find_in_page') {
-			return trimTrailingEllipsis($i18n.t('Finding in page'));
+		const localizedToolAction = getLocalizedToolActionLabel(item?.action, $i18n.t);
+		if (localizedToolAction) {
+			return localizedToolAction;
 		}
 
 		return trimTrailingEllipsis(item?.description ?? item?.action ?? '');
@@ -149,16 +154,9 @@
 	};
 
 	const getToolTitle = (toolCall) => {
-		switch (normalizeToolName(toolCall?.attributes?.name)) {
-			case 'web_search':
-				return trimTrailingEllipsis($i18n.t('Searching the web'));
-			case 'open_page':
-				return trimTrailingEllipsis($i18n.t('Opening page'));
-			case 'find_in_page':
-				return trimTrailingEllipsis($i18n.t('Finding in page'));
-			default:
-				return trimTrailingEllipsis(toolCall?.attributes?.name ?? '');
-		}
+		const normalizedToolName = normalizeToolName(toolCall?.attributes?.name);
+		const localizedToolName = getLocalizedToolActionLabel(normalizedToolName, $i18n.t);
+		return localizedToolName || trimTrailingEllipsis(toolCall?.attributes?.name ?? '');
 	};
 
 	const getToolSubtitle = (toolCall) => {

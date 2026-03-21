@@ -33,6 +33,8 @@
 	export let history = {};
 	export let selectedModels;
 	export let atSelectedModel;
+	export let taskIds = null;
+	export let generating = false;
 
 	let messages = [];
 
@@ -470,6 +472,8 @@
 								{chatId}
 								bind:history
 								{selectedModels}
+								{taskIds}
+								{generating}
 								messageId={message.id}
 								idx={messageIdx}
 								{user}

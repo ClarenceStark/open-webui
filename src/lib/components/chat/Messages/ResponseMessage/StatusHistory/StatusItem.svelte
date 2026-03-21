@@ -1,5 +1,10 @@
 <script>
 	import { getContext } from 'svelte';
+	import {
+		getLocalizedToolActionLabel,
+		getLocalizedToolDescriptionLabel,
+		trimTrailingEllipsis
+	} from '../../toolStatus';
 	const i18n = getContext('i18n');
 
 	export let status = null;
@@ -8,8 +13,6 @@
 	export let subtitleOverride = '';
 
 	const resolveDone = (item, forceDone = false) => (forceDone || item?.done) === true;
-	const trimTrailingEllipsis = (value) => (value ?? '').replace(/(?:\.\.\.|…)\s*$/, '').trim();
-
 	const getTitle = (item) => {
 		if (!item) {
 			return '';
@@ -67,12 +70,14 @@
 			return trimTrailingEllipsis($i18n.t('Searching the web'));
 		}
 
-		if (item?.action === 'open_page') {
-			return trimTrailingEllipsis($i18n.t('Opening page'));
+		const localizedToolDescription = getLocalizedToolDescriptionLabel(item?.description, $i18n.t);
+		if (localizedToolDescription) {
+			return localizedToolDescription;
 		}
 
-		if (item?.action === 'find_in_page') {
-			return trimTrailingEllipsis($i18n.t('Finding in page'));
+		const localizedToolAction = getLocalizedToolActionLabel(item?.action, $i18n.t);
+		if (localizedToolAction) {
+			return localizedToolAction;
 		}
 
 		if (item?.action === 'artifact_uploaded') {

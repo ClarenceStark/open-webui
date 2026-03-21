@@ -37,6 +37,8 @@
 	export let regenerateResponse;
 	export let continueResponse;
 	export let mergeResponses;
+	export let taskIds = null;
+	export let generating = false;
 
 	export let addMessages;
 	export let triggerScroll;
@@ -92,10 +94,12 @@
 				{rateMessage}
 				{actionMessage}
 				{submitMessage}
-				{deleteMessage}
-				{continueResponse}
-				{regenerateResponse}
-				{addMessages}
+					{deleteMessage}
+					{continueResponse}
+					{regenerateResponse}
+					{taskIds}
+					{generating}
+					{addMessages}
 				{readOnly}
 				{editCodeBlock}
 				{topPadding}
@@ -115,11 +119,13 @@
 					{rateMessage}
 					{actionMessage}
 					{submitMessage}
-					{deleteMessage}
-					{continueResponse}
-					{regenerateResponse}
-					{mergeResponses}
-					{triggerScroll}
+						{deleteMessage}
+						{continueResponse}
+						{regenerateResponse}
+						{mergeResponses}
+						{taskIds}
+						{generating}
+						{triggerScroll}
 					{addMessages}
 					{readOnly}
 					{editCodeBlock}

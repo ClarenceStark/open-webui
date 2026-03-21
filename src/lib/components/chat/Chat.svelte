@@ -621,6 +621,52 @@
 		return false;
 	};
 
+	const hasStructuredToolOrArtifactActivity = (message) => {
+		if (!message) {
+			return false;
+		}
+
+		if (typeof message.content === 'string') {
+			if (/<details\b(?=[^>]*\btype="tool_calls")[^>]*>/i.test(message.content)) {
+				return true;
+			}
+
+			if (/<details\b(?=[^>]*\btype="code_interpreter")[^>]*>/i.test(message.content)) {
+				return true;
+			}
+		}
+
+		if (Array.isArray(message.output)) {
+			if (
+				message.output.some((item) =>
+					['function_call', 'function_call_output', 'open_webui:code_interpreter'].includes(
+						item?.type
+					)
+				)
+			) {
+				return true;
+			}
+		}
+
+		if (Array.isArray(message.statusHistory) && message.statusHistory.length > 0) {
+			return true;
+		}
+
+		if (message.status && typeof message.status === 'object') {
+			return true;
+		}
+
+		if (Array.isArray(message.files) && message.files.length > 0) {
+			return true;
+		}
+
+		if (Array.isArray(message.code_executions) && message.code_executions.length > 0) {
+			return true;
+		}
+
+		return false;
+	};
+
 	const canVisuallyCompleteAssistantMessage = (message) => {
 		if (!message || message.role !== 'assistant' || message.error) {
 			return false;
@@ -631,6 +677,10 @@
 		}
 
 		if (hasPendingStructuredToolActivity(message)) {
+			return false;
+		}
+
+		if (hasStructuredToolOrArtifactActivity(message)) {
 			return false;
 		}
 
@@ -659,21 +709,15 @@
 					Math.floor(Date.now() / 1000) - Math.floor(currentMessage.timestamp ?? Date.now() / 1000)
 				);
 
-				history.messages[messageId] = {
-					...currentMessage,
-					done: true,
-					pseudoDone: true,
-					pseudoDoneDurationSeconds: durationSeconds
-				};
-
-				if (history.currentId === messageId) {
-					taskIds = null;
-					generating = false;
-					generationController = null;
-				}
-			}, 900)
-		);
-	};
+					history.messages[messageId] = {
+						...currentMessage,
+						done: true,
+						pseudoDone: true,
+						pseudoDoneDurationSeconds: durationSeconds
+					};
+				}, 900)
+			);
+		};
 
 	const forceVisualCompletion = (messageId, message) => {
 		if (!message || message.done === true) {
@@ -691,12 +735,6 @@
 			pseudoDone: true,
 			pseudoDoneDurationSeconds: durationSeconds
 		};
-
-		if (history.currentId === messageId) {
-			taskIds = null;
-			generating = false;
-			generationController = null;
-		}
 
 		return true;
 	};
@@ -3520,6 +3558,8 @@
 										{continueResponse}
 										{regenerateResponse}
 										{mergeResponses}
+										{taskIds}
+										{generating}
 										{chatActionHandler}
 										{addMessages}
 										topPadding={true}

@@ -45,6 +45,8 @@
 	export let continueResponse: Function;
 	export let regenerateResponse: Function;
 	export let mergeResponses: Function;
+	export let taskIds = null;
+	export let generating = false;
 
 	export let addMessages: Function;
 
@@ -294,35 +296,37 @@
 					{#if selectedModelIdx !== null}
 						{#key history.currentId}
 							{#if message}
-								<ResponseMessage
-									{chatId}
-									{history}
-									messageId={message?.id}
-									{selectedModels}
-									isLastMessage={true}
-									siblings={groupedMessageIds[selectedModelIdx].messageIds}
-									gotoMessage={(message, messageIdx) => gotoMessage(selectedModelIdx, messageIdx)}
-									showPreviousMessage={() => showPreviousMessage(selectedModelIdx)}
-									showNextMessage={() => showNextMessage(selectedModelIdx)}
-									{setInputText}
-									{updateChat}
-									{editMessage}
-									{saveMessage}
-									{rateMessage}
-									{deleteMessage}
-									{actionMessage}
-									{submitMessage}
-									{continueResponse}
-									regenerateResponse={async (message, prompt = null) => {
-										regenerateResponse(message, prompt);
-										await tick();
-										groupedMessageIdsIdx[selectedModelIdx] =
-											groupedMessageIds[selectedModelIdx].messageIds.length - 1;
-									}}
-									{addMessages}
-									{readOnly}
-									{topPadding}
-								/>
+									<ResponseMessage
+										{chatId}
+										{history}
+										messageId={message?.id}
+										{selectedModels}
+										isLastMessage={true}
+										siblings={groupedMessageIds[selectedModelIdx].messageIds}
+										gotoMessage={(message, messageIdx) => gotoMessage(selectedModelIdx, messageIdx)}
+										showPreviousMessage={() => showPreviousMessage(selectedModelIdx)}
+										showNextMessage={() => showNextMessage(selectedModelIdx)}
+										{setInputText}
+										{updateChat}
+										{editMessage}
+										{saveMessage}
+										{rateMessage}
+										{deleteMessage}
+										{actionMessage}
+										{submitMessage}
+										{continueResponse}
+										{taskIds}
+										{generating}
+										regenerateResponse={async (message, prompt = null) => {
+											regenerateResponse(message, prompt);
+											await tick();
+											groupedMessageIdsIdx[selectedModelIdx] =
+												groupedMessageIds[selectedModelIdx].messageIds.length - 1;
+										}}
+										{addMessages}
+										{readOnly}
+										{topPadding}
+									/>
 							{/if}
 						{/key}
 					{/if}
@@ -350,36 +354,38 @@
 						>
 							{#key history.currentId}
 								{#if message}
-									<ResponseMessage
-										{chatId}
-										{history}
-										messageId={_messageId}
-										{selectedModels}
-										isLastMessage={true}
-										siblings={groupedMessageIds[modelIdx].messageIds}
-										gotoMessage={(message, messageIdx) => gotoMessage(modelIdx, messageIdx)}
-										showPreviousMessage={() => showPreviousMessage(modelIdx)}
-										showNextMessage={() => showNextMessage(modelIdx)}
-										{setInputText}
-										{updateChat}
-										{editMessage}
-										{saveMessage}
-										{rateMessage}
-										{deleteMessage}
-										{actionMessage}
-										{submitMessage}
-										{continueResponse}
-										regenerateResponse={async (message, prompt = null) => {
-											regenerateResponse(message, prompt);
-											await tick();
-											groupedMessageIdsIdx[modelIdx] =
-												groupedMessageIds[modelIdx].messageIds.length - 1;
-										}}
-										{addMessages}
-										{readOnly}
-										{editCodeBlock}
-										{topPadding}
-									/>
+										<ResponseMessage
+											{chatId}
+											{history}
+											messageId={_messageId}
+											{selectedModels}
+											isLastMessage={true}
+											siblings={groupedMessageIds[modelIdx].messageIds}
+											gotoMessage={(message, messageIdx) => gotoMessage(modelIdx, messageIdx)}
+											showPreviousMessage={() => showPreviousMessage(modelIdx)}
+											showNextMessage={() => showNextMessage(modelIdx)}
+											{setInputText}
+											{updateChat}
+											{editMessage}
+											{saveMessage}
+											{rateMessage}
+											{deleteMessage}
+											{actionMessage}
+											{submitMessage}
+											{continueResponse}
+											{taskIds}
+											{generating}
+											regenerateResponse={async (message, prompt = null) => {
+												regenerateResponse(message, prompt);
+												await tick();
+												groupedMessageIdsIdx[modelIdx] =
+													groupedMessageIds[modelIdx].messageIds.length - 1;
+											}}
+											{addMessages}
+											{readOnly}
+											{editCodeBlock}
+											{topPadding}
+										/>
 								{/if}
 							{/key}
 						</div>

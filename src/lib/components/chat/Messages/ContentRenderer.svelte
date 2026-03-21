@@ -24,6 +24,7 @@
 	export let selectedModels = [];
 
 	export let done = true;
+	export let isComplete = true;
 	export let model = null;
 	export let sources = null;
 
@@ -165,6 +166,7 @@
 		{save}
 		{preview}
 		{done}
+		{isComplete}
 		{editCodeBlock}
 		{topPadding}
 		{sourceIds}

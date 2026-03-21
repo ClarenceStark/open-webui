@@ -23,6 +23,7 @@
 
 	export let id: string;
 	export let done = true;
+	export let isComplete = true;
 	export let tokens: Token[];
 	export let sourceIds = [];
 	export let onSourceClick: Function = () => {};
@@ -84,7 +85,7 @@
 				title={token.title}
 				on:click={(e) => handleLinkClick(e, token.href)}
 			>
-				<svelte:self id={`${id}-a`} tokens={token.tokens} {onSourceClick} {done} />
+				<svelte:self id={`${id}-a`} tokens={token.tokens} {onSourceClick} {done} {isComplete} />
 			</a>
 		{:else}
 			<a
@@ -96,17 +97,43 @@
 			>
 		{/if}
 	{:else if token.type === 'image'}
-		<Image src={token.href} alt={token.text} />
+		{#if isComplete}
+			<Image src={token.href} alt={token.text} />
+		{/if}
 	{:else if token.type === 'strong'}
-		<strong><svelte:self id={`${id}-strong`} tokens={token.tokens} {onSourceClick} /></strong>
+		<strong
+			><svelte:self
+				id={`${id}-strong`}
+				tokens={token.tokens}
+				{onSourceClick}
+				{done}
+				{isComplete}
+			/></strong
+		>
 	{:else if token.type === 'em'}
-		<em><svelte:self id={`${id}-em`} tokens={token.tokens} {onSourceClick} /></em>
+		<em
+			><svelte:self
+				id={`${id}-em`}
+				tokens={token.tokens}
+				{onSourceClick}
+				{done}
+				{isComplete}
+			/></em
+		>
 	{:else if token.type === 'codespan'}
 		<CodespanToken {token} {done} />
 	{:else if token.type === 'br'}
 		<br />
 	{:else if token.type === 'del'}
-		<del><svelte:self id={`${id}-del`} tokens={token.tokens} {onSourceClick} /></del>
+		<del
+			><svelte:self
+				id={`${id}-del`}
+				tokens={token.tokens}
+				{onSourceClick}
+				{done}
+				{isComplete}
+			/></del
+		>
 	{:else if token.type === 'inlineKatex'}
 		{#if token.text}
 			<KatexRenderer content={token.text} displayMode={false} />

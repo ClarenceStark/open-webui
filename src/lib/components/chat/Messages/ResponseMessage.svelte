@@ -61,6 +61,11 @@
 	import RegenerateMenu from './ResponseMessage/RegenerateMenu.svelte';
 	import StatusHistory from './ResponseMessage/StatusHistory.svelte';
 	import FullHeightIframe from '$lib/components/common/FullHeightIframe.svelte';
+	import {
+		getLocalizedToolActionLabel,
+		getLocalizedToolDescriptionLabel,
+		trimTrailingEllipsis
+	} from './toolStatus';
 
 	interface MessageType {
 		id: string;
@@ -134,6 +139,9 @@
 	let playbackBufferStartedAt = 0;
 	let firstVisibleAssistantTextAt: number | null = null;
 	let firstVisibleAssistantTextAtMessageId: string | null = null;
+	let finalOutputRevealTimer: ReturnType<typeof setTimeout> | null = null;
+	let finalOutputRevealKey = '';
+	let finalOutputRevealed = false;
 
 	const extractReasoningMetadata = (content: string) => {
 		if (typeof content !== 'string' || !content.includes('type="reasoning"')) {
@@ -174,8 +182,6 @@
 		const lang = ($i18n?.language ?? '').toLowerCase();
 		return lang.startsWith('en') ? 'Thinking' : '正在思考';
 	};
-
-	const trimTrailingEllipsis = (value: string) => value.replace(/(?:\.\.\.|…)\s*$/, '').trim();
 
 	const formatThoughtSummary = (durationInSeconds: number | null) => {
 		if (durationInSeconds === null || Number.isNaN(durationInSeconds)) {
@@ -319,12 +325,14 @@
 			return trimTrailingEllipsis($i18n.t('Searching the web'));
 		}
 
-		if (item?.action === 'open_page') {
-			return trimTrailingEllipsis($i18n.t('Opening page'));
+		const localizedToolDescription = getLocalizedToolDescriptionLabel(item?.description, $i18n.t);
+		if (localizedToolDescription) {
+			return localizedToolDescription;
 		}
 
-		if (item?.action === 'find_in_page') {
-			return trimTrailingEllipsis($i18n.t('Finding in page'));
+		const localizedToolAction = getLocalizedToolActionLabel(item?.action, $i18n.t);
+		if (localizedToolAction) {
+			return localizedToolAction;
 		}
 
 		if (item?.action === 'artifact_uploaded') {
@@ -345,18 +353,12 @@
 			return '';
 		}
 
-		switch (toolCall.attributes.name) {
-			case 'web_search':
-				return trimTrailingEllipsis($i18n.t('Searching the web'));
-			case 'open_page':
-				return trimTrailingEllipsis($i18n.t('Opening page'));
-			case 'find_in_page':
-				return trimTrailingEllipsis($i18n.t('Finding in page'));
-			default:
-				return toolCall.attributes.name
-					? $i18n.t('Executing **{{NAME}}**...', { NAME: toolCall.attributes.name }).replace(/\*\*/g, '')
-					: getThinkingLabel();
+		const localizedToolName = getLocalizedToolActionLabel(toolCall.attributes.name, $i18n.t);
+		if (localizedToolName) {
+			return localizedToolName;
 		}
+
+		return trimTrailingEllipsis(toolCall.attributes.name ?? '') || getThinkingLabel();
 	};
 
 	export let siblings;
@@ -376,6 +378,8 @@
 	export let submitMessage: Function;
 	export let continueResponse: Function;
 	export let regenerateResponse: Function;
+	export let taskIds = null;
+	export let generating = false;
 
 	export let addMessages: Function;
 
@@ -436,8 +440,7 @@
 		typeof message?.content === 'string'
 			? sanitizeAssistantDisplayContent(
 					message.content,
-					(message?.done ?? false) ||
-						/<details\b(?=[^>]*\btype="reasoning")[^>]*\bdone="true"/i.test(message.content)
+					isActuallyDone
 				)
 			: message?.content;
 	$: displayedAssistantContent =
@@ -457,7 +460,8 @@
 		hasVisibleAssistantResponseText &&
 		!/<details\b(?=[^>]*\btype="tool_calls")[^>]*\bdone="false"/i.test(targetContent ?? '') &&
 		!/<details\b(?=[^>]*\btype="code_interpreter")[^>]*\bdone="false"/i.test(targetContent ?? '');
-	$: effectiveReasoningDone = (targetDone ?? false) || (targetReasoningMetadata?.done ?? false);
+	$: isActuallyDone = (message?.done ?? false) && message?.pseudoDone !== true;
+	$: effectiveReasoningDone = isActuallyDone || (targetReasoningMetadata?.done ?? false);
 	$: hasVisibleReasoningDetails =
 		typeof renderedContent === 'string' &&
 		/<details\b(?=[^>]*\btype="reasoning")[^>]*>/i.test(renderedContent);
@@ -489,15 +493,12 @@
 						: Math.max(0, firstVisibleAssistantTextAt - startedAtSeconds);
 				})()
 			: null;
-	$: fallbackDisplayedDurationSeconds = hasAssistantResponseStarted
-		? frozenFallbackThoughtDurationSeconds ??
-			targetReasoningMetadata?.duration ??
-			pseudoDoneDurationSeconds ??
-			null
-		: targetReasoningMetadata?.duration ??
-			pseudoDoneDurationSeconds ??
-			frozenFallbackThoughtDurationSeconds ??
-			null;
+	$: fallbackDisplayedDurationSeconds =
+		frozenFallbackThoughtDurationSeconds ??
+		frozenElapsedAtIndicatorFreeze ??
+		pseudoDoneDurationSeconds ??
+		targetReasoningMetadata?.duration ??
+		null;
 	$: fallbackThoughtSummary = formatThoughtSummary(
 		fallbackDisplayedDurationSeconds
 	);
@@ -527,6 +528,22 @@
 			latestStatusItem?.done !== true ||
 			pendingStatusItem !== null ||
 			pendingToolCallDetail !== null);
+	let indicatorWasEverAnimated = false;
+	let indicatorFrozeAtSeconds: number | null = null;
+	$: {
+		if (shouldAnimateUnifiedIndicator) {
+			indicatorWasEverAnimated = true;
+			indicatorFrozeAtSeconds = null;
+		} else if (indicatorWasEverAnimated && indicatorFrozeAtSeconds === null) {
+			indicatorFrozeAtSeconds = Math.floor(Date.now() / 1000);
+		}
+	}
+	$: frozenElapsedAtIndicatorFreeze = (() => {
+		if (indicatorFrozeAtSeconds === null) return null;
+		const startedAtSeconds = normalizeStartedAtSeconds(fallbackThinkingStartedAt);
+		if (startedAtSeconds === null) return null;
+		return Math.max(0, indicatorFrozeAtSeconds - startedAtSeconds);
+	})();
 	$: shouldShowUnifiedIndicator =
 		!message.error &&
 		(hasWorkflowDetails || shouldShowFallbackThinking || targetReasoningMetadata !== null);
@@ -535,6 +552,69 @@
 		typeof displayedAssistantContent === 'string'
 			? removeAllDetails(displayedAssistantContent).trim()
 			: '';
+	$: finalOutputArtifactsKey = JSON.stringify({
+		content: targetContent ?? '',
+		files: (latestSourceMessage?.files ?? []).map(
+			(file) =>
+				`${file?.url ?? ''}|${file?.name ?? ''}|${file?.content_type ?? ''}|${file?.type ?? ''}`
+			)
+	});
+	$: currentHistoryMessageDone =
+		history?.currentId && history?.messages?.[history.currentId]
+			? history.messages[history.currentId]?.done === true
+			: true;
+	$: isAwaitingGlobalCompletion =
+		isLastMessage &&
+		(generating || ((taskIds ?? []).length > 0) || !currentHistoryMessageDone);
+	$: shouldDelayFinalOutputReveal = isLastMessage;
+	$: finalOutputPresentationReady =
+		hasAssistantResponseStarted ||
+		(isActuallyDone &&
+			effectiveReasoningDone &&
+			!hasVisibleAssistantResponseText &&
+			pendingStatusItem === null &&
+			pendingToolCallDetail === null);
+	$: finalOutputContentReady = isActuallyDone && finalOutputPresentationReady;
+	$: {
+		if (
+			!isActuallyDone ||
+			message?.error ||
+			isAwaitingGlobalCompletion ||
+			!finalOutputPresentationReady
+		) {
+			if (finalOutputRevealTimer) {
+				clearTimeout(finalOutputRevealTimer);
+				finalOutputRevealTimer = null;
+			}
+			finalOutputRevealKey = '';
+			finalOutputRevealed = false;
+		} else if (!shouldDelayFinalOutputReveal) {
+			if (finalOutputRevealTimer) {
+				clearTimeout(finalOutputRevealTimer);
+				finalOutputRevealTimer = null;
+			}
+			finalOutputRevealKey = finalOutputArtifactsKey;
+			finalOutputRevealed = true;
+		} else if (finalOutputArtifactsKey !== finalOutputRevealKey) {
+			if (finalOutputRevealTimer) {
+				clearTimeout(finalOutputRevealTimer);
+			}
+			finalOutputRevealKey = finalOutputArtifactsKey;
+			finalOutputRevealed = false;
+			finalOutputRevealTimer = setTimeout(() => {
+				if (
+					finalOutputRevealKey === finalOutputArtifactsKey &&
+					isActuallyDone &&
+					finalOutputPresentationReady &&
+					!isAwaitingGlobalCompletion
+				) {
+					finalOutputRevealed = true;
+				}
+			}, 1200);
+		}
+	}
+	$: shouldShowFiles = finalOutputContentReady && !!message?.files?.length;
+	$: shouldShowMessageActions = finalOutputRevealed && finalOutputPresentationReady;
 
 	const getPlaybackCharsPerSecond = (queuedChars: number, done: boolean) => {
 		const baseRate = 54;
@@ -1132,6 +1212,10 @@
 			contentContainerElement.removeEventListener('copy', contentCopyHandler);
 		}
 
+		if (finalOutputRevealTimer) {
+			clearTimeout(finalOutputRevealTimer);
+		}
+
 		stopContentPlayback();
 	});
 </script>
@@ -1301,9 +1385,9 @@
 										messageId={message.id}
 										{history}
 										{selectedModels}
-										content={displayedAssistantContent}
+									content={displayedAssistantContent}
 									sources={message.sources}
-									floatingButtons={message?.done &&
+									floatingButtons={shouldShowMessageActions &&
 										!readOnly &&
 										($settings?.showFloatingActionButtons ?? true)}
 									save={!readOnly}
@@ -1313,6 +1397,7 @@
 									done={($settings?.chatFadeStreamingText ?? true)
 										? (message?.done ?? false)
 										: true}
+									isComplete={finalOutputContentReady}
 									{model}
 									onTaskClick={async (e) => {
 										console.log(e);
@@ -1355,10 +1440,11 @@
 									<CodeExecutions codeExecutions={message.code_executions} />
 								{/if}
 
-								{#if message?.files && message.files.length > 0}
+								{#if shouldShowFiles}
 									<div
 										class="my-2 w-full flex overflow-x-auto gap-2 flex-wrap"
 										dir={$settings?.chatDirection ?? 'auto'}
+										in:fade={{ duration: 180 }}
 									>
 										{#each message.files as file}
 											<div>
@@ -1387,7 +1473,7 @@
 						bind:this={buttonsContainerElement}
 						class="flex justify-start overflow-x-auto buttons text-gray-600 dark:text-gray-500 mt-0.5"
 					>
-						{#if message.done || siblings.length > 1}
+						{#if shouldShowMessageActions || siblings.length > 1}
 							{#if siblings.length > 1}
 								<div class="flex self-center min-w-fit" dir="ltr">
 									<button
@@ -1485,7 +1571,7 @@
 								</div>
 							{/if}
 
-							{#if message.done}
+							{#if shouldShowMessageActions}
 								{#if !readOnly}
 									{#if $user?.role === 'user' ? ($user?.permissions?.chat?.edit ?? true) : true}
 										<Tooltip content={$i18n.t('Edit')} placement="bottom">
@@ -1973,7 +2059,7 @@
 						{/if}
 					</div>
 
-					{#if message.done && showRateComment}
+					{#if shouldShowMessageActions && isActuallyDone && showRateComment}
 						<RateComment
 							bind:message
 							bind:show={showRateComment}
@@ -1985,7 +2071,7 @@
 						/>
 					{/if}
 
-					{#if (isLastMessage || ($settings?.keepFollowUpPrompts ?? false)) && message.done && !readOnly && (message?.followUps ?? []).length > 0}
+					{#if (isLastMessage || ($settings?.keepFollowUpPrompts ?? false)) && shouldShowMessageActions && isActuallyDone && !readOnly && (message?.followUps ?? []).length > 0}
 						<div class="mt-2.5" in:fade={{ duration: 100 }}>
 							<FollowUps
 								followUps={message?.followUps}

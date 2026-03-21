@@ -16,6 +16,7 @@
 	export let id = '';
 	export let content;
 	export let done = true;
+	export let isComplete = true;
 	export let model = null;
 	export let save = false;
 	export let preview = false;
@@ -96,6 +97,7 @@
 		{tokens}
 		{id}
 		{done}
+		{isComplete}
 		{save}
 		{preview}
 		{paragraphTag}

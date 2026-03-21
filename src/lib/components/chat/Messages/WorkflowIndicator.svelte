@@ -79,7 +79,7 @@
 			Number.isFinite(frozenElapsedSeconds) &&
 			frozenElapsedSeconds >= 0
 		) {
-			elapsedSeconds = Math.floor(frozenElapsedSeconds);
+			elapsedSeconds = Math.max(elapsedSeconds, Math.floor(frozenElapsedSeconds));
 			return;
 		}
 

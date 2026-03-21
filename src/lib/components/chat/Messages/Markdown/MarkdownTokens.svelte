@@ -31,6 +31,7 @@
 	export let sourceIds = [];
 
 	export let done = true;
+	export let isComplete = true;
 
 	export let save = false;
 	export let preview = false;
@@ -100,6 +101,7 @@
 				id={`${id}-${tokenIdx}-h`}
 				tokens={token.tokens}
 				{done}
+				{isComplete}
 				{sourceIds}
 				{onSourceClick}
 			/>
@@ -153,6 +155,7 @@
 												id={`${id}-${tokenIdx}-header-${headerIdx}`}
 												tokens={header.tokens}
 												{done}
+												{isComplete}
 												{sourceIds}
 												{onSourceClick}
 											/>
@@ -179,6 +182,7 @@
 												id={`${id}-${tokenIdx}-row-${rowIdx}-${cellIdx}`}
 												tokens={cell.tokens}
 												{done}
+												{isComplete}
 												{sourceIds}
 												{onSourceClick}
 											/>
@@ -227,6 +231,7 @@
 					id={`${id}-${tokenIdx}`}
 					tokens={token.tokens}
 					{done}
+					{isComplete}
 					{editCodeBlock}
 					{onTaskClick}
 					{sourceIds}
@@ -297,6 +302,7 @@
 									tokens={item.tokens}
 									top={token.loose}
 									{done}
+									{isComplete}
 									{editCodeBlock}
 									{onTaskClick}
 									{sourceIds}
@@ -309,6 +315,7 @@
 								tokens={item.tokens}
 								top={token.loose}
 								{done}
+								{isComplete}
 								{editCodeBlock}
 								{onTaskClick}
 								{sourceIds}
