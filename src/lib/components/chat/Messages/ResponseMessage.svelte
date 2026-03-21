@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { toast } from 'svelte-sonner';
 	import dayjs from 'dayjs';
+	import { decode } from 'html-entities';
 
 	import { createEventDispatcher, onDestroy } from 'svelte';
 	import { onMount, tick, getContext } from 'svelte';
@@ -39,12 +40,11 @@
 	} from '$lib/utils';
 	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
 
-	import ThinkingIndicator from './ThinkingIndicator.svelte';
+	import WorkflowIndicator from './WorkflowIndicator.svelte';
 	import Image from '$lib/components/common/Image.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import RateComment from './RateComment.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
-	import WebSearchResults from './ResponseMessage/WebSearchResults.svelte';
 	import Sparkles from '$lib/components/icons/Sparkles.svelte';
 
 	import DeleteConfirmDialog from '$lib/components/common/ConfirmDialog.svelte';
@@ -170,9 +170,16 @@
 		};
 	};
 
+	const getThinkingLabel = () => {
+		const lang = ($i18n?.language ?? '').toLowerCase();
+		return lang.startsWith('en') ? 'Thinking' : '正在思考';
+	};
+
+	const trimTrailingEllipsis = (value: string) => value.replace(/(?:\.\.\.|…)\s*$/, '').trim();
+
 	const formatThoughtSummary = (durationInSeconds: number | null) => {
 		if (durationInSeconds === null || Number.isNaN(durationInSeconds)) {
-			return $i18n.t('Thinking...');
+			return getThinkingLabel();
 		}
 
 		if (durationInSeconds < 1) {
@@ -210,6 +217,147 @@
 			.replace(/&nbsp;/g, ' ')
 			.replace(/\s+/g, ' ')
 			.trim();
+
+	const STATUS_HISTORY_HIDDEN_ACTIONS = new Set([
+		'artifact_uploaded',
+		'download_artifact',
+		'view_image'
+	]);
+
+	const TOOL_CALL_DETAILS_REGEX =
+		/<details\b(?=[^>]*\btype="tool_calls")[^>]*>[\s\S]*?<\/details>/gi;
+
+	const parseDetailAttributes = (detail: string) => {
+		const attributes = {};
+		const attributesRegex = /(\w+)="([^"]*)"/g;
+		let match;
+
+		while ((match = attributesRegex.exec(detail)) !== null) {
+			attributes[match[1]] = decode(match[2] ?? '');
+		}
+
+		return attributes;
+	};
+
+	const parseIndicatorResult = (value: string) => {
+		if (typeof value !== 'string' || value.trim().length === 0) {
+			return '';
+		}
+
+		try {
+			return parseIndicatorResult(JSON.parse(value));
+		} catch {
+			return value;
+		}
+	};
+
+	const extractToolCallDetails = (content: string) => {
+		if (typeof content !== 'string' || !content.includes('type="tool_calls"')) {
+			return [];
+		}
+
+		return Array.from(content.matchAll(TOOL_CALL_DETAILS_REGEX)).map((match, idx) => ({
+			id: `tool-call-${idx}`,
+			attributes: parseDetailAttributes(match[0] ?? '')
+		}));
+	};
+
+	const getStatusIndicatorText = (item) => {
+		if (!item) {
+			return '';
+		}
+
+		if (item?.description?.includes('{{count}}')) {
+			return $i18n.t(item.description, {
+				count: (item?.urls || item?.items || []).length
+			});
+		}
+
+		if (item?.description?.includes('{{searchQuery}}')) {
+			return $i18n.t(item.description, {
+				searchQuery: item?.query
+			});
+		}
+
+		if (item?.description === 'No search query generated') {
+			return $i18n.t('No search query generated');
+		}
+
+		if (item?.description === 'Generating search query') {
+			return $i18n.t('Generating search query');
+		}
+
+		if (item?.action === 'knowledge_search') {
+			return $i18n.t(`Searching Knowledge for "{{searchQuery}}"`, {
+				searchQuery: item?.query
+			});
+		}
+
+		if (item?.action === 'web_search_queries_generated' && item?.queries?.length) {
+			return $i18n.t('Searching the web');
+		}
+
+		if (item?.action === 'queries_generated' && item?.queries?.length) {
+			return $i18n.t('Querying');
+		}
+
+		if (item?.action === 'sources_retrieved' && item?.count !== undefined) {
+			if (item.count === 0) {
+				return $i18n.t('No sources found');
+			}
+
+			if (item.count === 1) {
+				return $i18n.t('Retrieved 1 source');
+			}
+
+			return $i18n.t('Retrieved {{count}} sources', {
+				count: item.count
+			});
+		}
+
+		if (item?.description === 'Searching the web') {
+			return trimTrailingEllipsis($i18n.t('Searching the web'));
+		}
+
+		if (item?.action === 'open_page') {
+			return trimTrailingEllipsis($i18n.t('Opening page'));
+		}
+
+		if (item?.action === 'find_in_page') {
+			return trimTrailingEllipsis($i18n.t('Finding in page'));
+		}
+
+		if (item?.action === 'artifact_uploaded') {
+			return (item?.files ?? []).length > 1
+				? $i18n.t('Generated {{count}} files', { count: item.files.length })
+				: $i18n.t('Generated file');
+		}
+
+		if (item?.description) {
+			return trimTrailingEllipsis(item.description);
+		}
+
+		return trimTrailingEllipsis(item?.action ?? '');
+	};
+
+	const getToolCallIndicatorText = (toolCall) => {
+		if (!toolCall?.attributes) {
+			return '';
+		}
+
+		switch (toolCall.attributes.name) {
+			case 'web_search':
+				return trimTrailingEllipsis($i18n.t('Searching the web'));
+			case 'open_page':
+				return trimTrailingEllipsis($i18n.t('Opening page'));
+			case 'find_in_page':
+				return trimTrailingEllipsis($i18n.t('Finding in page'));
+			default:
+				return toolCall.attributes.name
+					? $i18n.t('Executing **{{NAME}}**...', { NAME: toolCall.attributes.name }).replace(/\*\*/g, '')
+					: getThinkingLabel();
+		}
+	};
 
 	export let siblings;
 
@@ -292,6 +440,8 @@
 						/<details\b(?=[^>]*\btype="reasoning")[^>]*\bdone="true"/i.test(message.content)
 				)
 			: message?.content;
+	$: displayedAssistantContent =
+		typeof renderedContent === 'string' ? removeDetails(renderedContent, ['reasoning']) : renderedContent;
 	$: targetReasoningMetadata =
 		typeof targetContent === 'string' ? extractReasoningMetadata(targetContent) : null;
 	$: pseudoDoneDurationSeconds =
@@ -303,6 +453,10 @@
 	$: visibleAssistantResponseText =
 		typeof renderedContent === 'string' ? getVisibleAssistantResponseText(renderedContent) : '';
 	$: hasVisibleAssistantResponseText = visibleAssistantResponseText.length > 0;
+	$: hasAssistantResponseStarted =
+		hasVisibleAssistantResponseText &&
+		!/<details\b(?=[^>]*\btype="tool_calls")[^>]*\bdone="false"/i.test(targetContent ?? '') &&
+		!/<details\b(?=[^>]*\btype="code_interpreter")[^>]*\bdone="false"/i.test(targetContent ?? '');
 	$: effectiveReasoningDone = (targetDone ?? false) || (targetReasoningMetadata?.done ?? false);
 	$: hasVisibleReasoningDetails =
 		typeof renderedContent === 'string' &&
@@ -335,16 +489,52 @@
 						: Math.max(0, firstVisibleAssistantTextAt - startedAtSeconds);
 				})()
 			: null;
-	$: fallbackDisplayedDurationSeconds =
-		targetReasoningMetadata?.duration ??
-		pseudoDoneDurationSeconds ??
-		frozenFallbackThoughtDurationSeconds ??
-		null;
+	$: fallbackDisplayedDurationSeconds = hasAssistantResponseStarted
+		? frozenFallbackThoughtDurationSeconds ??
+			targetReasoningMetadata?.duration ??
+			pseudoDoneDurationSeconds ??
+			null
+		: targetReasoningMetadata?.duration ??
+			pseudoDoneDurationSeconds ??
+			frozenFallbackThoughtDurationSeconds ??
+			null;
 	$: fallbackThoughtSummary = formatThoughtSummary(
 		fallbackDisplayedDurationSeconds
 	);
+	$: visibleStatusHistory = (message?.statusHistory ?? []).filter(
+		(item) => item && item.hidden !== true && !STATUS_HISTORY_HIDDEN_ACTIONS.has(item.action)
+	);
+	$: parsedToolCallDetails =
+		typeof targetContent === 'string' ? extractToolCallDetails(targetContent) : [];
+	$: latestStatusItem = visibleStatusHistory.at(-1) ?? null;
+	$: pendingStatusItem = [...visibleStatusHistory].reverse().find((item) => item?.done !== true) ?? null;
+	$: pendingToolCallDetail =
+		[...parsedToolCallDetails].reverse().find((item) => item?.attributes?.done !== 'true') ?? null;
+	$: hasWorkflowDetails =
+		visibleStatusHistory.length > 0 || parsedToolCallDetails.length > 0;
+	$: unifiedIndicatorText = hasAssistantResponseStarted
+		? fallbackThoughtSummary
+		: latestStatusItem
+			? getStatusIndicatorText(latestStatusItem)
+			: pendingToolCallDetail
+				? getToolCallIndicatorText(pendingToolCallDetail)
+				: pendingStatusItem
+					? getStatusIndicatorText(pendingStatusItem)
+				: fallbackThoughtSummary;
+	$: shouldAnimateUnifiedIndicator =
+		!hasAssistantResponseStarted &&
+		(!effectiveReasoningDone ||
+			latestStatusItem?.done !== true ||
+			pendingStatusItem !== null ||
+			pendingToolCallDetail !== null);
+	$: shouldShowUnifiedIndicator =
+		!message.error &&
+		(hasWorkflowDetails || shouldShowFallbackThinking || targetReasoningMetadata !== null);
+	let workflowExpanded = false;
 	$: imageAltText =
-		typeof renderedContent === 'string' ? removeAllDetails(renderedContent).trim() : '';
+		typeof displayedAssistantContent === 'string'
+			? removeAllDetails(displayedAssistantContent).trim()
+			: '';
 
 	const getPlaybackCharsPerSecond = (queuedChars: number, done: boolean) => {
 		const baseRate = 54;
@@ -985,10 +1175,6 @@
 			<div>
 				<div class="chat-{message.role} w-full min-w-full markdown-prose">
 					<div>
-						{#if model?.info?.meta?.capabilities?.status_updates ?? true}
-							<StatusHistory statusHistory={message?.statusHistory} />
-						{/if}
-
 						{#if message?.embeds && message.embeds.length > 0}
 							<div
 								class="my-1 w-full flex overflow-x-auto gap-2 flex-wrap"
@@ -1081,32 +1267,41 @@
 							class="w-full flex flex-col relative {edit ? 'hidden' : ''}"
 							id="response-content-container"
 						>
-							{#if shouldShowFallbackThinking && !message.error}
+							{#if shouldShowUnifiedIndicator}
 								<div class="mb-1">
-									{#if effectiveReasoningDone || fallbackDisplayedDurationSeconds !== null}
-										<div
-											class="inline-flex min-h-12 items-center text-base font-normal tracking-[0.04em] text-gray-500 dark:text-gray-400"
-										>
-											{fallbackThoughtSummary}
-										</div>
-									{:else}
-										<ThinkingIndicator
+									<WorkflowIndicator
+											text={unifiedIndicatorText}
 											startedAt={fallbackThinkingStartedAt}
 											cacheKey={message.id}
-										/>
-									{/if}
-								</div>
+											expandable={hasWorkflowDetails}
+											animated={shouldAnimateUnifiedIndicator}
+											showElapsed={!hasAssistantResponseStarted}
+											frozenElapsedSeconds={shouldAnimateUnifiedIndicator
+												? null
+												: fallbackDisplayedDurationSeconds}
+										bind:open={workflowExpanded}
+									>
+											<div class="space-y-3">
+												{#if model?.info?.meta?.capabilities?.status_updates ?? true}
+													<StatusHistory
+														statusHistory={message?.statusHistory}
+														toolCallDetails={parsedToolCallDetails}
+													/>
+												{/if}
+											</div>
+										</WorkflowIndicator>
+									</div>
 							{/if}
 
 							{#if message.content && message.error !== true}
 								<!-- always show message contents even if there's an error -->
 								<!-- unless message.error === true which is legacy error handling, where the error message is stored in message.content -->
-								<ContentRenderer
-									id={`${chatId}-${message.id}`}
-									messageId={message.id}
-									{history}
-									{selectedModels}
-									content={renderedContent}
+									<ContentRenderer
+										id={`${chatId}-${message.id}`}
+										messageId={message.id}
+										{history}
+										{selectedModels}
+										content={displayedAssistantContent}
 									sources={message.sources}
 									floatingButtons={message?.done &&
 										!readOnly &&

@@ -28,6 +28,7 @@
 
 	export let open = false;
 	export let className = '';
+	export let titleText: string | null = null;
 
 	const RESULT_PREVIEW_LIMIT = 10000;
 	let expandedResult = false;
@@ -118,26 +119,30 @@
 			>
 				<!-- Label -->
 				<div class="flex-1 line-clamp-1">
-					<!-- Short label (below md) -->
-					<span class="@md:hidden font-semibold text-black dark:text-white">{attributes.name}</span>
-					<!-- Full label (md and above) -->
-					<span class="hidden @md:inline">
-						{#if isDone}
-							<Markdown
-								id={`${componentId}-tool-call-title`}
-								content={$i18n.t('View Result from **{{NAME}}**', {
-									NAME: attributes.name
-								})}
-							/>
-						{:else}
-							<Markdown
-								id={`${componentId}-tool-call-executing`}
-								content={$i18n.t('Executing **{{NAME}}**...', {
-									NAME: attributes.name
-								})}
-							/>
-						{/if}
-					</span>
+					{#if titleText}
+						<span class="text-sm text-gray-500 dark:text-gray-400">{titleText}</span>
+					{:else}
+						<!-- Short label (below md) -->
+						<span class="@md:hidden font-semibold text-black dark:text-white">{attributes.name}</span>
+						<!-- Full label (md and above) -->
+						<span class="hidden @md:inline">
+							{#if isDone}
+								<Markdown
+									id={`${componentId}-tool-call-title`}
+									content={$i18n.t('View Result from **{{NAME}}**', {
+										NAME: attributes.name
+									})}
+								/>
+							{:else}
+								<Markdown
+									id={`${componentId}-tool-call-executing`}
+									content={$i18n.t('Executing **{{NAME}}**...', {
+										NAME: attributes.name
+									})}
+								/>
+							{/if}
+						</span>
+					{/if}
 				</div>
 
 				<!-- Chevron -->
@@ -224,6 +229,8 @@
 							</div>
 						</div>
 					{/if}
+
+					<slot name="content" />
 				</div>
 			</div>
 		{/if}
