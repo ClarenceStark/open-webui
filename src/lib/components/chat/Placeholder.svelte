@@ -55,7 +55,7 @@
 
 	export let dragged = false;
 
-	let greetingPeriod = 'Hello';
+	let greetingKey = 'Hello, {{name}}';
 	let models = [];
 	let selectedModelIdx = 0;
 	let welcomeDescription = 'How can I help you today?';
@@ -66,12 +66,18 @@
 
 	$: models = selectedModels.map((id) => $_models.find((m) => m.id === id)).filter(Boolean);
 	$: welcomeDescription = getModelShortDescription(
-		atSelectedModel ?? models[selectedModelIdx] ?? models[0]
+		atSelectedModel ?? models[selectedModelIdx] ?? models[0],
+		$i18n.t
 	);
 
 	onMount(() => {
 		const hour = new Date().getHours();
-		greetingPeriod = hour < 12 ? 'Morning' : hour < 18 ? 'Afternoon' : 'Evening';
+		greetingKey =
+			hour < 12
+				? 'Good morning, {{name}}'
+				: hour < 18
+					? 'Good afternoon, {{name}}'
+					: 'Good evening, {{name}}';
 	});
 </script>
 
@@ -107,7 +113,9 @@
 			{:else}
 				<div class="chat-shell-welcome" in:fade={{ duration: 150 }}>
 					<h1 class="chat-shell-welcome-title">
-						{greetingPeriod}, {$user?.name?.split(' ')?.[0] ?? $WEBUI_NAME}
+						{$i18n.t(greetingKey, {
+							name: $user?.name?.split(' ')?.[0] ?? $WEBUI_NAME
+						})}
 					</h1>
 					<p class="chat-shell-welcome-subtitle">{welcomeDescription}</p>
 				</div>

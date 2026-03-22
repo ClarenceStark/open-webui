@@ -45,7 +45,7 @@
 							.map((model) => ({
 							value: model.id,
 							label: getModelDisplayName(model.name, model.id),
-							description: getModelShortDescription(model),
+							description: getModelShortDescription(model, $i18n.t),
 							model: model
 						}))}
 						{pinModelHandler}

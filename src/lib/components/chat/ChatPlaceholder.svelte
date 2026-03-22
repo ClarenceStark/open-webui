@@ -11,6 +11,7 @@
 	import {
 		getModelAvatarSrc,
 		getModelDisplayName,
+		getModelShortDescription,
 		shouldUseOpenAILogo
 	} from '$lib/utils/model-display';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
@@ -26,12 +27,17 @@
 
 	let mounted = false;
 	let selectedModelIdx = 0;
+	let selectedModelDescription = '';
 
 	$: if (modelIds.length > 0) {
 		selectedModelIdx = models.length - 1;
 	}
 
 	$: models = modelIds.map((id) => $_models.find((m) => m.id === id));
+	$: selectedModelDescription =
+		models[selectedModelIdx]?.info?.meta?.description != null
+			? $i18n.t(models[selectedModelIdx]?.info?.meta?.description)
+			: getModelShortDescription(models[selectedModelIdx], $i18n.t);
 
 	onMount(() => {
 		mounted = true;
@@ -50,9 +56,10 @@
 					>
 						<Tooltip
 							content={marked.parse(
-								sanitizeResponseContent(
-									models[selectedModelIdx]?.info?.meta?.description ?? ''
-								).replaceAll('\n', '<br>')
+								sanitizeResponseContent(selectedModelDescription ?? '').replaceAll(
+									'\n',
+									'<br>'
+								)
 							)}
 							placement="right"
 						>
@@ -93,14 +100,12 @@
 				</div>
 
 				<div in:fade={{ duration: 200, delay: 200 }}>
-					{#if models[selectedModelIdx]?.info?.meta?.description ?? null}
+					{#if selectedModelDescription}
 						<div
 							class="mt-0.5 text-base font-normal text-gray-500 dark:text-gray-400 line-clamp-3 markdown"
 						>
 							{@html marked.parse(
-								sanitizeResponseContent(
-									models[selectedModelIdx]?.info?.meta?.description
-								).replaceAll('\n', '<br>')
+								sanitizeResponseContent(selectedModelDescription).replaceAll('\n', '<br>')
 							)}
 						</div>
 						{#if models[selectedModelIdx]?.info?.meta?.user}
