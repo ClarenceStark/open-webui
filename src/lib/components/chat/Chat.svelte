@@ -1839,6 +1839,47 @@
 			return message;
 		}
 
+		const getCompletedToolCallIds = (output) => {
+			const completedCallIds = new Set();
+
+			for (const item of output ?? []) {
+				if (!item || typeof item !== 'object') {
+					continue;
+				}
+
+				if (item.type === 'function_call_output' && item.call_id) {
+					completedCallIds.add(item.call_id);
+				} else if (item.type === 'function_call' && item.status === 'completed') {
+					const callId = item.call_id ?? item.id;
+					if (callId) {
+						completedCallIds.add(callId);
+					}
+				}
+			}
+
+			return completedCallIds;
+		};
+
+		const markCompletedToolCallsInContent = (content, completedCallIds) => {
+			if (typeof content !== 'string' || completedCallIds.size === 0) {
+				return content;
+			}
+
+			return content.replace(
+				/(<details\s+type="tool_calls"[^>]*>[\s\S]*?<summary>Executing\.\.\.<\/summary>\s*<\/details>)/gs,
+				(block) => {
+					const callId = block.match(/\bid="([^"]+)"/)?.[1];
+					if (!completedCallIds.has(callId)) {
+						return block;
+					}
+
+					return block
+						.replace('done="false"', 'done="true"')
+						.replace('<summary>Executing...</summary>', '<summary>Tool Executed</summary>');
+				}
+			);
+		};
+
 		const normalizedMessage = {
 			...message
 		};
@@ -1871,17 +1912,6 @@
 			normalizedMessage.files = artifactFiles;
 		}
 
-		if (
-			artifactFiles.length > 0 &&
-			typeof normalizedMessage.content === 'string' &&
-			normalizedMessage.content.includes('name="download_artifact"') &&
-			normalizedMessage.content.includes('<summary>Executing...</summary>')
-		) {
-			normalizedMessage.content = normalizedMessage.content
-				.replace('done="false"', 'done="true"')
-				.replace('<summary>Executing...</summary>', '<summary>Tool Executed</summary>');
-		}
-
 		if (Array.isArray(normalizedMessage.output)) {
 			const hasFunctionCallOutput = normalizedMessage.output.some(
 				(item) => item?.type === 'function_call_output'
@@ -1908,6 +1938,13 @@
 						}
 					];
 				}
+			}
+
+			if (typeof normalizedMessage.content === 'string') {
+				normalizedMessage.content = markCompletedToolCallsInContent(
+					normalizedMessage.content,
+					getCompletedToolCallIds(normalizedMessage.output)
+				);
 			}
 		}
 

@@ -1,5 +1,6 @@
 import logging
 import json
+import re
 import time
 import uuid
 from typing import Optional
@@ -46,6 +47,51 @@ def _artifact_files_from_status_history(status_history):
     return files
 
 
+def _completed_tool_call_ids_from_output(output):
+    completed_ids = set()
+
+    for item in output or []:
+        if not isinstance(item, dict):
+            continue
+
+        item_type = item.get("type")
+        if item_type == "function_call_output":
+            call_id = item.get("call_id")
+            if call_id:
+                completed_ids.add(call_id)
+        elif item_type == "function_call" and item.get("status") == "completed":
+            call_id = item.get("call_id") or item.get("id")
+            if call_id:
+                completed_ids.add(call_id)
+
+    return completed_ids
+
+
+def _mark_completed_tool_calls_in_content(content: str, completed_call_ids: set[str]) -> str:
+    if not isinstance(content, str) or not completed_call_ids:
+        return content
+
+    pattern = re.compile(
+        r'(<details\s+type="tool_calls"[^>]*>[\s\S]*?<summary>Executing\.\.\.</summary>\s*</details>)'
+    )
+
+    def replace(match: re.Match) -> str:
+        block = match.group(1)
+        call_id_match = re.search(r'\bid="([^"]+)"', block)
+        if not call_id_match or call_id_match.group(1) not in completed_call_ids:
+            return block
+
+        return (
+            block.replace('done="false"', 'done="true"', 1).replace(
+                "<summary>Executing...</summary>",
+                "<summary>Tool Executed</summary>",
+                1,
+            )
+        )
+
+    return pattern.sub(replace, content)
+
+
 def _normalize_assistant_artifact_message(message: dict) -> dict:
     if not isinstance(message, dict) or message.get("role") != "assistant":
         return message
@@ -73,18 +119,9 @@ def _normalize_assistant_artifact_message(message: dict) -> dict:
             normalized["files"] = files
 
     content = normalized.get("content")
-    if (
-        files
-        and isinstance(content, str)
-        and 'name="download_artifact"' in content
-        and "<summary>Executing...</summary>" in content
-    ):
-        normalized["content"] = (
-            content.replace('done="false"', 'done="true"')
-            .replace("<summary>Executing...</summary>", "<summary>Tool Executed</summary>")
-        )
-
     output = normalized.get("output")
+    completed_tool_call_ids = set()
+
     if files and isinstance(output, list):
         has_function_call_output = any(
             isinstance(item, dict) and item.get("type") == "function_call_output"
@@ -118,6 +155,15 @@ def _normalize_assistant_artifact_message(message: dict) -> dict:
                         "files": files,
                     },
                 ]
+                output = normalized["output"]
+
+    if isinstance(output, list):
+        completed_tool_call_ids = _completed_tool_call_ids_from_output(output)
+
+    if isinstance(content, str) and "<summary>Executing...</summary>" in content:
+        normalized["content"] = _mark_completed_tool_calls_in_content(
+            content, completed_tool_call_ids
+        )
 
     return normalized
 
