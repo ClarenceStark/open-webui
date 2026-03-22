@@ -72,12 +72,68 @@
 
 	onMount(() => {
 		const hour = new Date().getHours();
-		greetingKey =
-			hour < 12
-				? 'Good morning, {{name}}'
-				: hour < 18
-					? 'Good afternoon, {{name}}'
-					: 'Good evening, {{name}}';
+
+		const greetingPools: string[][] = [
+			// 0–4: 凌晨
+			[
+				'Still up, {{name}}?',
+				'Night owl, {{name}} 🦉',
+				'Burning the midnight oil, {{name}}?'
+			],
+			// 5–8: 清晨
+			[
+				'Good morning, {{name}}',
+				'Rise and shine, {{name}} 🌤',
+				'Early bird, {{name}} 🐦'
+			],
+			// 9–10: 上午
+			[
+				'Good morning, {{name}}',
+				'Morning, {{name}} — what are we building today?',
+				'In the zone, {{name}}?'
+			],
+			// 11–12: 咖啡时间
+			[
+				'Coffee time, {{name}} ☕',
+				'Time for a break, {{name}}?',
+				'Refueling, {{name}}?'
+			],
+			// 13: 午后
+			[
+				'Afternoon, {{name}}',
+				'Post-lunch mode, {{name}} 😴',
+				"Afternoon slump? I've got you, {{name}}"
+			],
+			// 14–16: 下午
+			[
+				'Good afternoon, {{name}}',
+				"Afternoon, {{name}} — let's get things done",
+				'Making it happen, {{name}}?'
+			],
+			// 17–18: 傍晚
+			['Evening, {{name}}', 'Wrapping up, {{name}}?', 'Almost there, {{name}} 🌇'],
+			// 19–21: 晚上
+			[
+				'Good evening, {{name}}',
+				"Evening, {{name}} — what's on your mind?",
+				'Night mode on, {{name}} 🌙'
+			],
+			// 22–23: 深夜
+			['Late night, {{name}}?', 'Still going, {{name}}?', 'Night owl alert, {{name}} 🌙']
+		];
+
+		let pool: string[];
+		if (hour < 5) pool = greetingPools[0];
+		else if (hour < 9) pool = greetingPools[1];
+		else if (hour < 11) pool = greetingPools[2];
+		else if (hour < 13) pool = greetingPools[3];
+		else if (hour < 14) pool = greetingPools[4];
+		else if (hour < 17) pool = greetingPools[5];
+		else if (hour < 19) pool = greetingPools[6];
+		else if (hour < 22) pool = greetingPools[7];
+		else pool = greetingPools[8];
+
+		greetingKey = pool[Math.floor(Math.random() * pool.length)];
 	});
 </script>
 
