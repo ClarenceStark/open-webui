@@ -361,6 +361,15 @@
 		return trimTrailingEllipsis(toolCall.attributes.name ?? '') || getThinkingLabel();
 	};
 
+	const getDisplayedFiles = (files) => {
+		if (!Array.isArray(files) || files.length === 0) {
+			return [];
+		}
+
+		const finalOutputFiles = files.filter((file) => file?.is_final_output === true);
+		return finalOutputFiles.length > 0 ? finalOutputFiles : files;
+	};
+
 	export let siblings;
 
 	export let setInputText: Function = () => {};
@@ -554,10 +563,10 @@
 			: '';
 	$: finalOutputArtifactsKey = JSON.stringify({
 		content: targetContent ?? '',
-		files: (latestSourceMessage?.files ?? []).map(
+		files: getDisplayedFiles(latestSourceMessage?.files ?? []).map(
 			(file) =>
 				`${file?.url ?? ''}|${file?.name ?? ''}|${file?.content_type ?? ''}|${file?.type ?? ''}`
-			)
+		)
 	});
 	$: currentHistoryMessageDone =
 		history?.currentId && history?.messages?.[history.currentId]
@@ -613,7 +622,8 @@
 			}, 1200);
 		}
 	}
-	$: shouldShowFiles = finalOutputContentReady && !!message?.files?.length;
+	$: displayedFiles = getDisplayedFiles(message?.files ?? []);
+	$: shouldShowFiles = finalOutputContentReady && displayedFiles.length > 0;
 	$: shouldShowMessageActions = finalOutputRevealed && finalOutputPresentationReady;
 
 	const getPlaybackCharsPerSecond = (queuedChars: number, done: boolean) => {
@@ -1446,7 +1456,7 @@
 										dir={$settings?.chatDirection ?? 'auto'}
 										in:fade={{ duration: 180 }}
 									>
-										{#each message.files as file}
+										{#each displayedFiles as file}
 											<div>
 												{#if file.type === 'image' || (file?.content_type ?? '').startsWith('image/')}
 													<Image src={file.url} alt={imageAltText} />

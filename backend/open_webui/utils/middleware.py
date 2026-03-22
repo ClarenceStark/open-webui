@@ -337,6 +337,10 @@ def get_web_search_status_from_response_item(item: dict) -> Optional[dict]:
 
     queries = action.get("queries") or []
     query = action.get("query", "")
+    if not query and not any(
+        isinstance(candidate, str) and candidate.strip() for candidate in queries
+    ):
+        return None
     return {
         "action": "web_search",
         "description": "Searching the web",
@@ -1316,10 +1320,17 @@ def serialize_output(output: list) -> str:
                 }
                 result_text = "Finished searching within page" if done else "Searching within page"
             else:
+                query = action.get("query", "")
+                queries = action.get("queries", [])
+                if not query and not any(
+                    isinstance(candidate, str) and candidate.strip()
+                    for candidate in queries
+                ):
+                    continue
                 name = "web_search"
                 arguments = {
-                    "query": action.get("query", ""),
-                    "queries": action.get("queries", []),
+                    "query": query,
+                    "queries": queries,
                 }
                 result_text = "Search completed" if done else "Searching the web"
 
@@ -1973,6 +1984,26 @@ async def upload_artifact_to_chat(
         "filename": filename,
         "content_type": resolved_content_type,
         **({"size": len(file_bytes)} if file_bytes is not None else {}),
+        **(
+            {"auto_uploaded": bool(artifact.get("auto_uploaded"))}
+            if artifact.get("auto_uploaded") is not None
+            else {}
+        ),
+        **(
+            {"artifact_origin": artifact.get("artifact_origin")}
+            if artifact.get("artifact_origin")
+            else {}
+        ),
+        **(
+            {"is_final_output": bool(artifact.get("is_final_output"))}
+            if artifact.get("is_final_output") is not None
+            else {}
+        ),
+        **(
+            {"omitted_artifact_count": int(artifact.get("omitted_artifact_count", 0))}
+            if artifact.get("omitted_artifact_count")
+            else {}
+        ),
     }
 
     if metadata.get("chat_id") and metadata.get("message_id"):
@@ -2035,11 +2066,35 @@ def infer_artifacts_from_command_result(
             {
                 "path": line,
                 "name": filename,
+                "auto_uploaded": True,
+                "artifact_origin": "inferred",
                 **({"content_type": content_type} if content_type else {}),
             }
         )
 
     return artifacts
+
+
+def select_inferred_artifacts_for_chat(artifacts: list[dict]) -> tuple[list[dict], int]:
+    if len(artifacts) <= 1:
+        return artifacts, 0
+
+    image_artifacts = [
+        artifact
+        for artifact in artifacts
+        if isinstance(artifact, dict)
+        and str(artifact.get("content_type", "")).startswith("image/")
+    ]
+    selected = image_artifacts[-1] if image_artifacts else artifacts[-1]
+    omitted_count = max(0, len(artifacts) - 1)
+
+    return [
+        {
+            **selected,
+            "is_final_output": True,
+            "omitted_artifact_count": omitted_count,
+        }
+    ], omitted_count
 
 
 def dedupe_tool_result_files(files: list[dict]) -> list[dict]:
@@ -2210,15 +2265,21 @@ async def process_tool_result(
             tool_function_name, tool_result, metadata
         )
         if inferred_artifacts:
+            selected_artifacts, omitted_artifact_count = select_inferred_artifacts_for_chat(
+                inferred_artifacts
+            )
             tool_result = {
                 **tool_result,
-                "artifacts": inferred_artifacts,
+                "artifacts": selected_artifacts,
                 "summary": tool_result.get("summary")
                 or (
                     f"{tool_function_name}: Generated file ready for the user. "
                     "The system uploaded the printed output path automatically."
-                    if len(inferred_artifacts) == 1
-                    else f"{tool_function_name}: Generated {len(inferred_artifacts)} files and uploaded them automatically."
+                    if omitted_artifact_count == 0
+                    else (
+                        f"{tool_function_name}: Uploaded only the most recent generated file and "
+                        f"skipped {omitted_artifact_count} likely intermediate artifact(s)."
+                    )
                 ),
             }
 

@@ -42,6 +42,7 @@
 	let isExcel = false;
 	let isDocx = false;
 	let isPptx = false;
+	let isText = false;
 
 	let selectedTab = '';
 	let excelWorkbook: WorkBook | null = null;
@@ -59,8 +60,56 @@
 	let pptxSlides: string[] = [];
 	let pptxCurrentSlide = 0;
 	let pptxError = '';
+	let textContent = '';
+	let textContentError = '';
 
 	let pzInstance: PanZoom | null = null;
+
+	const TEXT_EXTS = new Set(['txt', 'text', 'log', 'ini', 'cfg', 'conf', 'env', 'rst']);
+
+	const getFileExt = (name?: string | null) => {
+		if (!name) return '';
+		const parts = name.toLowerCase().split('.');
+		return parts.length > 1 ? parts.pop() ?? '' : '';
+	};
+
+	const getContentType = () =>
+		item?.meta?.content_type ?? item?.content_type ?? item?.file?.meta?.content_type ?? '';
+
+	const getFileId = () => {
+		if (item?.id) return item.id;
+		if (typeof item?.url !== 'string' || item.url.length === 0) return null;
+
+		if (!item.url.startsWith('http') && !item.url.startsWith('/')) {
+			return item.url.replace(/\/content$/, '');
+		}
+
+		try {
+			const parsedUrl = item.url.startsWith('http')
+				? new URL(item.url)
+				: new URL(item.url, window.location.origin);
+			const match = parsedUrl.pathname.match(/\/files\/([^/]+)(?:\/content)?$/);
+			return match?.[1] ?? null;
+		} catch (error) {
+			console.error('Error parsing file URL:', error);
+			return null;
+		}
+	};
+
+	const getFileContentUrl = () => {
+		if (typeof item?.url === 'string' && item.url.length > 0) {
+			if (item.url.startsWith('http') || item.url.startsWith('/')) {
+				return item.url;
+			}
+
+			return `${WEBUI_API_BASE_URL}/files/${item.url}/content`;
+		}
+
+		const fileId = getFileId();
+		return fileId ? `${WEBUI_API_BASE_URL}/files/${fileId}/content` : null;
+	};
+
+	const getResolvedTextContent = () => item?.file?.data?.content ?? item?.content ?? textContent ?? '';
 
 	const initImagePanzoom = (node: HTMLElement) => {
 		pzInstance = panzoom(node, {
@@ -78,11 +127,11 @@
 	};
 
 	$: isPDF =
-		item?.meta?.content_type === 'application/pdf' ||
+		getContentType() === 'application/pdf' ||
 		(item?.name && item?.name.toLowerCase().endsWith('.pdf'));
 
 	$: isMarkdown =
-		item?.meta?.content_type === 'text/markdown' ||
+		getContentType() === 'text/markdown' ||
 		(item?.name && item?.name.toLowerCase().endsWith('.md'));
 
 	$: isCode =
@@ -109,7 +158,7 @@
 			item.name.toLowerCase().endsWith('.rb'));
 
 	$: isAudio =
-		(item?.meta?.content_type ?? '').startsWith('audio/') ||
+		getContentType().startsWith('audio/') ||
 		(item?.name && item?.name.toLowerCase().endsWith('.mp3')) ||
 		(item?.name && item?.name.toLowerCase().endsWith('.wav')) ||
 		(item?.name && item?.name.toLowerCase().endsWith('.ogg')) ||
@@ -117,7 +166,7 @@
 		(item?.name && item?.name.toLowerCase().endsWith('.webm'));
 
 	$: isImage =
-		(item?.meta?.content_type ?? '').startsWith('image/') ||
+		getContentType().startsWith('image/') ||
 		(item?.name &&
 			(item.name.toLowerCase().endsWith('.png') ||
 				item.name.toLowerCase().endsWith('.jpg') ||
@@ -129,25 +178,31 @@
 				item.name.toLowerCase().endsWith('.ico')));
 
 	$: isExcel =
-		item?.meta?.content_type === 'application/vnd.ms-excel' ||
-		item?.meta?.content_type ===
+		getContentType() === 'application/vnd.ms-excel' ||
+		getContentType() ===
 			'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
-		item?.meta?.content_type === 'text/csv' ||
-		item?.meta?.content_type === 'application/csv' ||
+		getContentType() === 'text/csv' ||
+		getContentType() === 'application/csv' ||
 		(item?.name &&
 			(item.name.toLowerCase().endsWith('.xls') ||
 				item.name.toLowerCase().endsWith('.xlsx') ||
 				item.name.toLowerCase().endsWith('.csv')));
 
 	$: isDocx =
-		item?.meta?.content_type ===
+		getContentType() ===
 			'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
 		(item?.name && item.name.toLowerCase().endsWith('.docx'));
 
 	$: isPptx =
-		item?.meta?.content_type ===
+		getContentType() ===
 			'application/vnd.openxmlformats-officedocument.presentationml.presentation' ||
 		(item?.name && item.name.toLowerCase().endsWith('.pptx'));
+
+	$: isText =
+		getContentType().startsWith('text/') ||
+		TEXT_EXTS.has(getFileExt(item?.name)) ||
+		isMarkdown ||
+		isCode;
 
 	const loadExcelContent = async () => {
 		try {
@@ -213,9 +268,30 @@
 		}
 	};
 
+	const loadTextContent = async () => {
+		const fileId = getFileId();
+		if (!fileId) return;
+
+		try {
+			textContentError = '';
+			const arrayBuffer = await getFileContentById(fileId);
+			if (!arrayBuffer) return;
+
+			textContent = new TextDecoder('utf-8').decode(arrayBuffer);
+		} catch (error) {
+			console.error('Error loading text file:', error);
+			textContentError = $i18n.t('Failed to load file content.');
+		}
+	};
+
 	const loadContent = async () => {
 		selectedTab = '';
 		expandedContent = false;
+		textContent = '';
+		textContentError = '';
+		excelError = '';
+		docxError = '';
+		pptxError = '';
 		if (item?.type === 'collection') {
 			loading = true;
 
@@ -231,13 +307,27 @@
 		} else if (item?.type === 'file') {
 			loading = true;
 
-			const file = await getFileById(localStorage.token, item.id).catch((e) => {
-				console.error('Error fetching file:', e);
-				return null;
-			});
+			const fileId = getFileId();
+
+			const file = fileId
+				? await getFileById(localStorage.token, fileId).catch((e) => {
+						console.error('Error fetching file:', e);
+						return null;
+					})
+				: null;
 
 			if (file) {
-				item.file = file || {};
+				item = {
+					...item,
+					id: file.id ?? fileId ?? item?.id,
+					meta: item?.meta ?? file.meta ?? {},
+					content_type: item?.content_type ?? file?.meta?.content_type,
+					file: file || {}
+				};
+			}
+
+			if (isText && !getResolvedTextContent()) {
+				await loadTextContent();
 			}
 
 			// Load Excel content if it's an Excel file
@@ -283,15 +373,9 @@
 							href="#"
 							class="hover:underline line-clamp-1"
 							on:click|preventDefault={() => {
-								if (!isPDF && item.url) {
-									window.open(
-										item.type === 'file'
-											? item?.url?.startsWith('http')
-												? item.url
-												: `${WEBUI_API_BASE_URL}/files/${item.url}/content`
-											: item.url,
-										'_blank'
-									);
+								const fileUrl = item.type === 'file' ? getFileContentUrl() : item?.url;
+								if (!isPDF && fileUrl) {
+									window.open(fileUrl, '_blank');
 								}
 							}}
 						>
@@ -313,8 +397,8 @@
 
 			<div>
 				<div class="flex flex-col items-center md:flex-row gap-1 justify-between w-full">
-					<div class=" flex flex-wrap text-xs gap-1 text-gray-500">
-						{#if item?.type === 'collection'}
+						<div class=" flex flex-wrap text-xs gap-1 text-gray-500">
+							{#if item?.type === 'collection'}
 							{#if item?.type}
 								<div class="capitalize shrink-0">{item.type}</div>
 								•
@@ -337,18 +421,18 @@
 							•
 						{/if}
 
-						{#if item?.file?.data?.content}
-							<div class="capitalize shrink-0">
-								{#if isExcel && rowCount > 0 && selectedTab === 'preview'}
-									{$i18n.t('{{COUNT}} Rows', {
+							{#if getResolvedTextContent()}
+								<div class="capitalize shrink-0">
+									{#if isExcel && rowCount > 0 && selectedTab === 'preview'}
+										{$i18n.t('{{COUNT}} Rows', {
 										COUNT: rowCount
 									})}
-								{:else}
-									{$i18n.t('{{COUNT}} extracted lines', {
-										COUNT: getLineCount(item?.file?.data?.content ?? '')
-									})}
-								{/if}
-							</div>
+									{:else}
+										{$i18n.t('{{COUNT}} extracted lines', {
+											COUNT: getLineCount(getResolvedTextContent())
+										})}
+									{/if}
+								</div>
 
 							<div class="flex items-center gap-1 shrink-0">
 								• {$i18n.t('Formatting may be inconsistent from source.')}
@@ -407,7 +491,7 @@
 					</div>
 				{/if}
 
-				{#if isAudio || isPDF || isExcel || isCode || isMarkdown || isDocx || isPptx}
+					{#if isAudio || isPDF || isExcel || isCode || isMarkdown || isDocx || isPptx}
 					<div
 						class="flex mb-2.5 scrollbar-none overflow-x-auto w-full border-b border-gray-50 dark:border-gray-850/30 text-center text-sm font-medium bg-transparent dark:text-gray-200"
 					>
@@ -433,8 +517,8 @@
 					</div>
 				{/if}
 
-				{#if isImage}
-					<div class="relative w-full max-h-[70vh] overflow-hidden">
+					{#if isImage}
+						<div class="relative w-full max-h-[70vh] overflow-hidden">
 						<div class="absolute top-2 right-2 z-10">
 							<Tooltip content={$i18n.t('Reset view')}>
 								<button
@@ -445,26 +529,28 @@
 								</button>
 							</Tooltip>
 						</div>
-						<div use:initImagePanzoom>
-							<img
-								src={`${WEBUI_API_BASE_URL}/files/${item.id}/content`}
-								alt={item?.name ?? 'Image'}
-								class="w-full object-contain rounded-lg"
-								loading="lazy"
+							<div use:initImagePanzoom>
+								<img
+									src={getFileContentUrl()}
+									alt={item?.name ?? 'Image'}
+									class="w-full object-contain rounded-lg"
+									loading="lazy"
 								draggable="false"
 							/>
 						</div>
 					</div>
-				{:else if selectedTab === ''}
-					{#if item?.file?.data}
-						{@const rawContent = (item?.file?.data?.content ?? '').trim() || 'No content'}
-						{@const isTruncated =
-							($settings?.renderMarkdownInPreviews ?? true) &&
-							rawContent.length > CONTENT_PREVIEW_LIMIT &&
-							!expandedContent}
-						{#if $settings?.renderMarkdownInPreviews ?? true}
-							<div
-								class="max-h-96 overflow-scroll scrollbar-hidden text-sm prose dark:prose-invert max-w-full"
+					{:else if selectedTab === ''}
+						{#if getResolvedTextContent() || textContentError}
+							{@const rawContent = getResolvedTextContent().trim() || 'No content'}
+							{@const isTruncated =
+								($settings?.renderMarkdownInPreviews ?? true) &&
+								rawContent.length > CONTENT_PREVIEW_LIMIT &&
+								!expandedContent}
+							{#if textContentError}
+								<div class="text-red-500 text-sm p-4">{textContentError}</div>
+							{:else if $settings?.renderMarkdownInPreviews ?? true}
+								<div
+									class="max-h-96 overflow-scroll scrollbar-hidden text-sm prose dark:prose-invert max-w-full"
 							>
 								<Markdown
 									content={isTruncated ? rawContent.slice(0, CONTENT_PREVIEW_LIMIT) : rawContent}
@@ -488,52 +574,20 @@
 								{rawContent}
 							</div>
 						{/if}
-					{:else if item?.content}
-						{@const rawContent = (item?.content ?? '').trim() || 'No content'}
-						{@const isTruncated =
-							($settings?.renderMarkdownInPreviews ?? true) &&
-							rawContent.length > CONTENT_PREVIEW_LIMIT &&
-							!expandedContent}
-						{#if $settings?.renderMarkdownInPreviews ?? true}
-							<div
-								class="max-h-96 overflow-scroll scrollbar-hidden text-sm prose dark:prose-invert max-w-full"
-							>
-								<Markdown
-									content={isTruncated ? rawContent.slice(0, CONTENT_PREVIEW_LIMIT) : rawContent}
-									id="file-preview-content"
-								/>
-							</div>
-							{#if isTruncated}
-								<button
-									class="mt-1 text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 transition"
-									on:click={() => {
-										expandedContent = true;
-									}}
-								>
-									{$i18n.t('Show all ({{COUNT}} characters)', {
-										COUNT: rawContent.length.toLocaleString()
-									})}
-								</button>
-							{/if}
-						{:else}
-							<div class="max-h-96 overflow-scroll scrollbar-hidden text-xs whitespace-pre-wrap">
-								{rawContent}
-							</div>
 						{/if}
-					{/if}
-				{:else if selectedTab === 'preview'}
-					{#if isAudio}
-						<audio
-							src={`${WEBUI_API_BASE_URL}/files/${item.id}/content`}
-							class="w-full border-0 rounded-lg mb-2"
-							controls
-							playsinline
-						/>
-					{:else if isPDF}
-						<PDFViewer
-							url={`${WEBUI_API_BASE_URL}/files/${item.id}/content`}
-							className="w-full h-[70vh] border-0 rounded-lg"
-						/>
+					{:else if selectedTab === 'preview'}
+						{#if isAudio}
+							<audio
+								src={getFileContentUrl()}
+								class="w-full border-0 rounded-lg mb-2"
+								controls
+								playsinline
+							/>
+						{:else if isPDF}
+							<PDFViewer
+								url={getFileContentUrl()}
+								className="w-full h-[70vh] border-0 rounded-lg"
+							/>
 					{:else if isExcel}
 						{#if excelError}
 							<div class="text-red-500 text-sm p-4">
@@ -566,23 +620,23 @@
 								<div class="text-gray-500 text-sm p-4">No content available</div>
 							{/if}
 						{/if}
-					{:else if isCode}
-						<div class="max-h-[60vh] overflow-scroll scrollbar-hidden text-sm relative">
-							<CodeBlock
-								code={item.file.data.content}
-								lang={item.name.split('.').pop()}
-								token={null}
-								edit={false}
+						{:else if isCode}
+							<div class="max-h-[60vh] overflow-scroll scrollbar-hidden text-sm relative">
+								<CodeBlock
+									code={getResolvedTextContent()}
+									lang={item.name.split('.').pop()}
+									token={null}
+									edit={false}
 								run={false}
 								save={false}
 							/>
 						</div>
-					{:else if isMarkdown}
-						<div
-							class="max-h-[60vh] overflow-scroll scrollbar-hidden text-sm prose dark:prose-invert max-w-full"
-						>
-							<Markdown content={item.file.data.content} id="markdown-viewer" />
-						</div>
+						{:else if isMarkdown}
+							<div
+								class="max-h-[60vh] overflow-scroll scrollbar-hidden text-sm prose dark:prose-invert max-w-full"
+							>
+								<Markdown content={getResolvedTextContent()} id="markdown-viewer" />
+							</div>
 					{:else if isDocx}
 						{#if docxError}
 							<div class="text-red-500 text-sm p-4">{docxError}</div>
