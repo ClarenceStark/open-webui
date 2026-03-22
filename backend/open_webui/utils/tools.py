@@ -1009,6 +1009,21 @@ async def get_terminal_tools(
     cookies = {}
     headers = {"Content-Type": "application/json", "X-User-Id": user.id}
 
+    chat_id = metadata.get("chat_id")
+    session_id = metadata.get("session_id")
+    message_id = metadata.get("message_id")
+    if chat_id:
+        headers["X-Chat-Id"] = str(chat_id)
+        headers["X-Terminal-Scope"] = f"chat_{chat_id}"
+    elif session_id:
+        headers["X-Session-Id"] = str(session_id)
+        headers["X-Terminal-Scope"] = f"session_{session_id}"
+
+    if session_id:
+        headers["X-Session-Id"] = str(session_id)
+    if message_id:
+        headers["X-Message-Id"] = str(message_id)
+
     if auth_type == "bearer":
         headers["Authorization"] = f"Bearer {connection.get('key', '')}"
     elif auth_type == "session":

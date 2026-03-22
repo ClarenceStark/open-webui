@@ -79,6 +79,15 @@ async def proxy_terminal(
         target_url += f"?{request.query_params}"
 
     headers = {"X-User-Id": user.id}
+    for header_name in (
+        "x-chat-id",
+        "x-session-id",
+        "x-message-id",
+        "x-terminal-scope",
+    ):
+        value = request.headers.get(header_name)
+        if value:
+            headers[header_name] = value
     cookies = {}
     auth_type = connection.get("auth_type", "bearer")
 

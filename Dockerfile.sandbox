@@ -1,0 +1,57 @@
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bash \
+    patch \
+    tini \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG UID=10001
+ARG GID=10001
+
+RUN groupadd --gid "${GID}" sandbox \
+    && useradd --uid "${UID}" --gid "${GID}" --create-home --shell /bin/bash sandbox
+
+RUN python -m venv /opt/venvs/default \
+    && /opt/venvs/default/bin/pip install --no-cache-dir --upgrade pip setuptools wheel \
+    && /opt/venvs/default/bin/pip install --no-cache-dir \
+        fastapi \
+        "uvicorn[standard]" \
+        pydantic \
+        python-multipart \
+        pillow \
+        python-docx \
+        matplotlib \
+        pandas \
+        pypandoc
+
+RUN python -m venv /opt/venvs/data \
+    && /opt/venvs/data/bin/pip install --no-cache-dir --upgrade pip setuptools wheel \
+    && /opt/venvs/data/bin/pip install --no-cache-dir \
+        numpy \
+        pandas \
+        pyarrow \
+        openpyxl \
+        xlsxwriter \
+        matplotlib \
+        seaborn \
+        scikit-learn \
+        scipy \
+        jupyter \
+        ipykernel
+
+WORKDIR /app
+COPY sandbox_worker/app.py /app/sandbox_worker/app.py
+
+ENV PATH=/opt/venvs/default/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    VIRTUAL_ENV=/opt/venvs/default
+
+USER sandbox
+EXPOSE 8765
+
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["python", "-m", "uvicorn", "sandbox_worker.app:app", "--host", "0.0.0.0", "--port", "8765"]

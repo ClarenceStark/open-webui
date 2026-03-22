@@ -351,11 +351,33 @@ def get_web_search_status_from_response_item(item: dict) -> Optional[dict]:
 
 
 def build_terminal_server_auth(
-    request: Request, user: UserModel, connection: dict, extra_params: dict
+    request: Request,
+    user: UserModel,
+    connection: dict,
+    extra_params: dict,
+    metadata: Optional[dict] = None,
 ) -> tuple[dict, dict]:
     headers = {"X-User-Id": user.id}
     cookies = {}
     auth_type = connection.get("auth_type", "bearer")
+    metadata = metadata or {}
+
+    chat_id = metadata.get("chat_id")
+    session_id = metadata.get("session_id")
+    message_id = metadata.get("message_id")
+    terminal_scope = None
+    if chat_id:
+        terminal_scope = f"chat_{chat_id}"
+        headers["X-Chat-Id"] = str(chat_id)
+    elif session_id:
+        terminal_scope = f"session_{session_id}"
+
+    if session_id:
+        headers["X-Session-Id"] = str(session_id)
+    if message_id:
+        headers["X-Message-Id"] = str(message_id)
+    if terminal_scope:
+        headers["X-Terminal-Scope"] = terminal_scope
 
     if auth_type == "bearer":
         key = connection.get("key", "")
@@ -393,7 +415,7 @@ def resolve_terminal_server_binding(
             raise HTTPException(status_code=403, detail="Access denied to sandbox terminal")
 
         headers, cookies = build_terminal_server_auth(
-            request, user, connection, extra_params
+            request, user, connection, extra_params, metadata
         )
         return {
             "url": connection.get("url", "").rstrip("/"),
@@ -426,7 +448,7 @@ def resolve_terminal_server_binding(
         return None
 
     headers, cookies = build_terminal_server_auth(
-        request, user, direct_server, extra_params
+        request, user, direct_server, extra_params, metadata
     )
     return {
         "url": direct_server.get("url", "").rstrip("/"),
@@ -710,9 +732,16 @@ async def sync_chat_files_to_terminal(
         raw = str(value or fallback)
         return re.sub(r"[^A-Za-z0-9._-]", "_", raw)
 
+    session_scope = (
+        f"chat_{sanitize_path_component(metadata.get('chat_id'), 'chat')}"
+        if metadata.get("chat_id")
+        else f"session_{sanitize_path_component(metadata.get('session_id'), 'default')}"
+    )
+
     target_dir = (
-        f"/workspace/open-webui-inputs/"
-        f"{sanitize_path_component(metadata.get('chat_id'), 'adhoc')}/"
+        f"/workspace/sessions/"
+        f"{session_scope}/"
+        f"inputs/"
         f"{sanitize_path_component(metadata.get('message_id'), 'message')}"
     )
 

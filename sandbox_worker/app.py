@@ -86,6 +86,7 @@ class SessionState:
     stdout_fd: Optional[int]
     stderr_fd: Optional[int]
     user_id: str
+    scope: str
     cwd: str
     command: str
     timeout_task: Optional[asyncio.Task] = None
@@ -149,18 +150,60 @@ def get_user_id(request: Request) -> str:
     return request.headers.get("x-user-id", "anonymous")
 
 
-def get_user_cwd(user_id: str) -> str:
-    if user_id not in USER_CWD:
-        USER_CWD[user_id] = "/workspace"
-    return USER_CWD[user_id]
+def sanitize_scope_component(value: Optional[str], fallback: str) -> str:
+    raw = str(value or fallback).strip()
+    sanitized = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in raw)
+    sanitized = sanitized.strip("._") or fallback
+    return sanitized[:120]
 
 
-def set_user_cwd(user_id: str, cwd: str):
-    USER_CWD[user_id] = cwd
+def derive_request_scope(request: Request) -> str:
+    explicit_scope = request.headers.get("x-terminal-scope", "").strip()
+    if explicit_scope:
+        return sanitize_scope_component(explicit_scope, "default")
+
+    chat_id = request.headers.get("x-chat-id", "").strip()
+    if chat_id:
+        return f"chat_{sanitize_scope_component(chat_id, 'chat')}"
+
+    session_id = request.headers.get("x-session-id", "").strip()
+    if session_id:
+        return f"session_{sanitize_scope_component(session_id, 'session')}"
+
+    return "default"
 
 
-def normalize_virtual_path(path: str, user_id: str) -> str:
-    base = PurePosixPath(get_user_cwd(user_id))
+def get_scope_root_virtual(scope: str) -> str:
+    return str(PurePosixPath("/workspace") / "sessions" / scope)
+
+
+def ensure_scope_workspace(scope: str) -> tuple[Path, str]:
+    virtual_root = get_scope_root_virtual(scope)
+    real_root = (WORKSPACE_ROOT / "sessions" / scope).resolve()
+    real_root.mkdir(parents=True, exist_ok=True)
+    for child in ("inputs", "outputs", "artifacts", "tmp"):
+        (real_root / child).mkdir(exist_ok=True)
+    return real_root, virtual_root
+
+
+def get_user_scope_key(user_id: str, scope: str) -> str:
+    return f"{user_id}:{scope}"
+
+
+def get_user_cwd(user_id: str, scope: str) -> str:
+    scope_key = get_user_scope_key(user_id, scope)
+    if scope_key not in USER_CWD:
+        _real_root, virtual_root = ensure_scope_workspace(scope)
+        USER_CWD[scope_key] = virtual_root
+    return USER_CWD[scope_key]
+
+
+def set_user_cwd(user_id: str, scope: str, cwd: str):
+    USER_CWD[get_user_scope_key(user_id, scope)] = cwd
+
+
+def normalize_virtual_path(path: str, user_id: str, scope: str) -> str:
+    base = PurePosixPath(get_user_cwd(user_id, scope))
     target = PurePosixPath(path)
     if not target.is_absolute():
         target = base / target
@@ -172,8 +215,8 @@ def normalize_virtual_path(path: str, user_id: str) -> str:
     return normalized
 
 
-def resolve_path(path: str, user_id: str) -> tuple[Optional[Path], str]:
-    virtual = normalize_virtual_path(path, user_id)
+def resolve_path(path: str, user_id: str, scope: str) -> tuple[Optional[Path], str]:
+    virtual = normalize_virtual_path(path, user_id, scope)
     if virtual == "/":
         return None, virtual
 
@@ -378,6 +421,7 @@ def spawn_session(
     cwd: Path,
     env: Optional[dict[str, str]],
     user_id: str,
+    scope: str,
     tty: bool,
 ) -> SessionState:
     command = virtual_to_real_in_text(command)
@@ -432,6 +476,7 @@ def spawn_session(
         stdout_fd=stdout_fd,
         stderr_fd=stderr_fd,
         user_id=user_id,
+        scope=scope,
         cwd=real_to_virtual_path(cwd),
         command=command,
     )
@@ -525,7 +570,8 @@ async def bootstrap_python_environment():
 @app.post("/api/terminals", response_model=TerminalCreateResponse, dependencies=[Depends(require_auth)])
 async def create_terminal(request: Request):
     user_id = get_user_id(request)
-    cwd_real, _ = resolve_path(get_user_cwd(user_id), user_id)
+    scope = derive_request_scope(request)
+    cwd_real, _ = resolve_path(get_user_cwd(user_id, scope), user_id, scope)
     cwd_real = cwd_real or WORKSPACE_ROOT
 
     session = spawn_session(
@@ -533,6 +579,7 @@ async def create_terminal(request: Request):
         cwd_real,
         None,
         user_id,
+        scope,
         tty=True,
     )
     SESSIONS[session.id] = session
@@ -601,17 +648,20 @@ async def terminal_socket(websocket: WebSocket, session_id: str):
 
 @app.get("/files/cwd", dependencies=[Depends(require_auth)])
 async def get_cwd(request: Request):
-    return {"cwd": get_user_cwd(get_user_id(request))}
+    user_id = get_user_id(request)
+    scope = derive_request_scope(request)
+    return {"cwd": get_user_cwd(user_id, scope)}
 
 
 @app.post("/files/cwd", dependencies=[Depends(require_auth)])
 async def set_cwd(request: Request, body: PathRequest):
     user_id = get_user_id(request)
-    real_path, virtual_path = resolve_path(body.path, user_id)
+    scope = derive_request_scope(request)
+    real_path, virtual_path = resolve_path(body.path, user_id, scope)
     if real_path is None:
         raise HTTPException(status_code=400, detail="Root path cannot be current working directory")
     ensure_directory(real_path)
-    set_user_cwd(user_id, virtual_path)
+    set_user_cwd(user_id, scope, virtual_path)
     return {"cwd": virtual_path}
 
 
@@ -621,7 +671,8 @@ async def list_directory(
     directory: str = Query("/", description="Virtual sandbox directory"),
 ):
     user_id = get_user_id(request)
-    real_path, virtual_path = resolve_path(directory, user_id)
+    scope = derive_request_scope(request)
+    real_path, virtual_path = resolve_path(directory, user_id, scope)
 
     if real_path is None:
         return {
@@ -653,7 +704,8 @@ async def read_file_endpoint(
     max_bytes: int = Query(default=200000, ge=1, le=5_000_000),
 ):
     user_id = get_user_id(request)
-    real_path, virtual_path = resolve_path(path, user_id)
+    scope = derive_request_scope(request)
+    real_path, virtual_path = resolve_path(path, user_id, scope)
     if real_path is None:
         raise HTTPException(status_code=400, detail="Cannot read the root directory")
 
@@ -678,7 +730,8 @@ async def read_file_endpoint(
 @app.get("/files/view", dependencies=[Depends(require_auth)])
 async def view_file(request: Request, path: str):
     user_id = get_user_id(request)
-    real_path, _ = resolve_path(path, user_id)
+    scope = derive_request_scope(request)
+    real_path, _ = resolve_path(path, user_id, scope)
     if real_path is None:
         raise HTTPException(status_code=400, detail="Cannot view the root directory")
     ensure_file(real_path)
@@ -693,7 +746,8 @@ async def upload_to_directory(
     file: UploadFile = File(...),
 ):
     user_id = get_user_id(request)
-    real_path, virtual_path = resolve_path(directory, user_id)
+    scope = derive_request_scope(request)
+    real_path, virtual_path = resolve_path(directory, user_id, scope)
     if real_path is None:
         raise HTTPException(status_code=400, detail="Cannot upload into the sandbox root")
     ensure_directory(real_path)
@@ -712,7 +766,8 @@ async def upload_to_directory(
 @app.post("/files/mkdir", dependencies=[Depends(require_auth)])
 async def create_directory(request: Request, body: PathRequest):
     user_id = get_user_id(request)
-    real_path, virtual_path = resolve_path(body.path, user_id)
+    scope = derive_request_scope(request)
+    real_path, virtual_path = resolve_path(body.path, user_id, scope)
     if real_path is None:
         raise HTTPException(status_code=400, detail="Cannot create the root directory")
     real_path.mkdir(parents=True, exist_ok=True)
@@ -722,7 +777,8 @@ async def create_directory(request: Request, body: PathRequest):
 @app.delete("/files/delete", dependencies=[Depends(require_auth)])
 async def delete_entry(request: Request, path: str):
     user_id = get_user_id(request)
-    real_path, virtual_path = resolve_path(path, user_id)
+    scope = derive_request_scope(request)
+    real_path, virtual_path = resolve_path(path, user_id, scope)
     if real_path is None:
         raise HTTPException(status_code=400, detail="Cannot delete the root directory")
 
@@ -741,8 +797,9 @@ async def delete_entry(request: Request, path: str):
 @app.post("/files/move", dependencies=[Depends(require_auth)])
 async def move_entry(request: Request, body: MoveRequest):
     user_id = get_user_id(request)
-    source_real, source_virtual = resolve_path(body.source, user_id)
-    destination_real, destination_virtual = resolve_path(body.destination, user_id)
+    scope = derive_request_scope(request)
+    source_real, source_virtual = resolve_path(body.source, user_id, scope)
+    destination_real, destination_virtual = resolve_path(body.destination, user_id, scope)
     if source_real is None or destination_real is None:
         raise HTTPException(status_code=400, detail="Root path cannot be moved")
 
@@ -766,10 +823,13 @@ async def proxy_port(port: int, path: str = ""):
 @app.post("/tools/exec", operation_id="exec_command", dependencies=[Depends(require_auth)])
 async def exec_command(request: Request, body: ExecCommandRequest):
     user_id = get_user_id(request)
-    cwd_real, cwd_virtual = resolve_path(body.workdir or get_user_cwd(user_id), user_id)
+    scope = derive_request_scope(request)
+    cwd_real, cwd_virtual = resolve_path(
+        body.workdir or get_user_cwd(user_id, scope), user_id, scope
+    )
     cwd_real = cwd_real or WORKSPACE_ROOT
 
-    session = spawn_session(body.cmd, cwd_real, body.env, user_id, tty=body.tty)
+    session = spawn_session(body.cmd, cwd_real, body.env, user_id, scope, tty=body.tty)
     session.cwd = cwd_virtual
     SESSIONS[session.id] = session
     session.timeout_task = asyncio.create_task(
@@ -834,8 +894,9 @@ async def list_files_tool(
     path: Optional[str] = Query(default=None),
 ):
     user_id = get_user_id(request)
-    target = path or get_user_cwd(user_id)
-    real_path, virtual_path = resolve_path(target, user_id)
+    scope = derive_request_scope(request)
+    target = path or get_user_cwd(user_id, scope)
+    real_path, virtual_path = resolve_path(target, user_id, scope)
 
     if real_path is None:
         entries = [
@@ -856,7 +917,7 @@ async def list_files_tool(
     return {
         "status": "success",
         "message": f"Listed files under {virtual_path}",
-        "cwd": get_user_cwd(user_id),
+        "cwd": get_user_cwd(user_id, scope),
         "entries": entries,
     }
 
@@ -880,7 +941,10 @@ async def read_file_tool(
 @app.post("/tools/apply_patch", operation_id="apply_patch", dependencies=[Depends(require_auth)])
 async def apply_patch_tool(request: Request, body: ApplyPatchRequest):
     user_id = get_user_id(request)
-    cwd_real, cwd_virtual = resolve_path(body.workdir or get_user_cwd(user_id), user_id)
+    scope = derive_request_scope(request)
+    cwd_real, cwd_virtual = resolve_path(
+        body.workdir or get_user_cwd(user_id, scope), user_id, scope
+    )
     cwd_real = cwd_real or WORKSPACE_ROOT
 
     patch_binary = shutil.which("patch")
@@ -914,7 +978,8 @@ async def download_artifact_tool(
     content_type: Optional[str] = Query(default=None),
 ):
     user_id = get_user_id(request)
-    real_path, virtual_path = resolve_path(path, user_id)
+    scope = derive_request_scope(request)
+    real_path, virtual_path = resolve_path(path, user_id, scope)
     if real_path is None:
         raise HTTPException(status_code=400, detail="Cannot download the root directory")
     ensure_file(real_path)
@@ -930,7 +995,8 @@ async def download_artifact_tool(
 @app.get("/tools/files/view_image", operation_id="view_image", dependencies=[Depends(require_auth)])
 async def view_image_tool(request: Request, path: str):
     user_id = get_user_id(request)
-    real_path, virtual_path = resolve_path(path, user_id)
+    scope = derive_request_scope(request)
+    real_path, virtual_path = resolve_path(path, user_id, scope)
     if real_path is None:
         raise HTTPException(status_code=400, detail="Cannot preview the root directory")
     ensure_file(real_path)

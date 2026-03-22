@@ -11,7 +11,7 @@ It is intentionally aligned with the existing Open Terminal integration points:
 
 When a chat turn includes uploaded Open WebUI files and a sandbox terminal is
 active, the backend mirrors those files into the worker under a sandbox path
-like `/workspace/open-webui-inputs/<chat>/<message>/...` before the model starts
+like `/workspace/sessions/chat_<chat_id>/inputs/<message_id>/...` before the model starts
 calling tools.
 
 ## Run

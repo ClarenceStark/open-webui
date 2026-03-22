@@ -83,6 +83,247 @@ Want to learn more about Open WebUI's features? Check out our [Open WebUI docume
 
 We are incredibly grateful for the generous support of our sponsors. Their contributions help us to maintain and improve our project, ensuring we can continue to deliver quality work to our community. Thank you!
 
+## Local Custom Runtime (macOS, this repo)
+
+This repository is customized to run in three pieces locally:
+
+1. Frontend static build in `build/`
+2. Open WebUI backend on `127.0.0.1:8080`
+3. Dockerized sandbox worker for terminal/file tools on `127.0.0.1:8765`
+
+The backend serves the built frontend. Command execution and file operations go through the sandbox worker, not through the main backend process.
+
+### Runtime chain
+
+The complete request path is:
+
+```text
+browser -> Open WebUI frontend -> Open WebUI backend (:8080) -> terminal proxy -> sandbox worker (:8765) -> /workspace
+```
+
+For command execution to work, both of the following must be true:
+
+- the Docker sandbox container is running on `127.0.0.1:8765`
+- Open WebUI has a terminal server connection pointing to that sandbox
+
+This repo expects the sandbox workspace to live at:
+
+```bash
+~/.open-webui/workdir
+```
+
+Each chat gets its own session directory:
+
+```bash
+~/.open-webui/workdir/sessions/chat_<chat_id>/
+```
+
+The sandbox worker auto-creates these per-chat subdirectories:
+
+- `inputs/`
+- `outputs/`
+- `artifacts/`
+- `tmp/`
+
+Uploaded files are mirrored into:
+
+```bash
+~/.open-webui/workdir/sessions/chat_<chat_id>/inputs/<message_id>/
+```
+
+Inside the container, the same workspace is mounted as:
+
+```bash
+/workspace
+```
+
+Two prebuilt Python environments are available inside the sandbox:
+
+- `/workspace/venvs/default`
+- `/workspace/venvs/data`
+
+### Ports
+
+- `8080`: backend and built frontend
+- `8765`: sandbox worker for command execution and file tools
+- `5173`: optional Vite frontend dev server
+
+### Paths
+
+- Repo root: `~/code/open-webui`
+- Backend data: `~/code/open-webui/backend/data`
+- Sandbox workdir: `~/.open-webui/workdir`
+- Sandbox compose file: `~/code/open-webui/docker-compose.sandbox.yaml`
+- Sandbox image file: `~/code/open-webui/Dockerfile.sandbox`
+
+### Production-like local start
+
+Use this when you want the complete local instance with frontend, backend, and command execution.
+
+#### 1) Install dependencies
+
+```bash
+cd ~/code/open-webui
+npm install
+/Users/clarencestark/code/open-webui/.venv/bin/pip install -r backend/requirements.txt
+```
+
+Docker Desktop must be running because terminal/file tools depend on the sandbox container.
+
+#### 2) Build frontend
+
+```bash
+cd ~/code/open-webui
+npm run build
+```
+
+#### 3) Initialize sandbox workdir
+
+```bash
+cd ~/code/open-webui
+./scripts/setup_open_webui_workdir.sh
+```
+
+#### 4) Start sandbox worker
+
+```bash
+cd ~/code/open-webui
+docker compose -f docker-compose.sandbox.yaml up -d --build
+```
+
+Equivalent helper script:
+
+```bash
+cd ~/code/open-webui
+./scripts/start_sandbox_container.sh
+```
+
+The sandbox worker listens on `127.0.0.1:8765` and mounts:
+
+- host `~/.open-webui/workdir`
+- container `/workspace`
+
+The container is intentionally restricted:
+
+- non-root user `10001:10001`
+- `read_only: true` container root filesystem
+- `cap_drop: ALL`
+- `no-new-privileges:true`
+
+#### 5) Configure the terminal server inside Open WebUI
+
+Open WebUI must know about the sandbox worker. In Admin Settings, add a terminal server like this:
+
+```json
+{
+  "id": "sandbox",
+  "name": "Sandbox",
+  "url": "http://127.0.0.1:8765",
+  "path": "/openapi.json",
+  "auth_type": "none",
+  "enabled": true
+}
+```
+
+UI path:
+
+- `Admin Settings`
+- `Integrations`
+- `Terminal Servers`
+
+Once this connection exists, terminal/file tools are exposed through the backend proxy and all models can use them.
+
+#### 6) Start backend
+
+```bash
+cd ~/code/open-webui/backend
+/Users/clarencestark/code/open-webui/.venv/bin/python -m uvicorn open_webui.main:app \
+  --host 127.0.0.1 \
+  --port 8080 \
+  --forwarded-allow-ips '*' \
+  --workers 1
+```
+
+Then open:
+
+```bash
+http://127.0.0.1:8080
+```
+
+#### 7) Optional one-shot hardening helper
+
+If you want a single command that initializes the workdir, starts the sandbox container, and restarts the backend:
+
+```bash
+cd ~/code/open-webui
+./scripts/harden_open_webui_sandbox.sh
+```
+
+The explicit step-by-step commands above remain the source of truth.
+
+### Frontend dev mode
+
+If you are actively editing the Svelte frontend, keep backend `8080` and sandbox `8765` running, then start Vite:
+
+```bash
+cd ~/code/open-webui
+npm run dev -- --host
+```
+
+Open:
+
+```bash
+http://127.0.0.1:5173
+```
+
+### Verification
+
+```bash
+lsof -nP -iTCP:8080 -sTCP:LISTEN
+curl -sS http://127.0.0.1:8080/health
+curl -sS http://127.0.0.1:8765/api/config
+docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+```
+
+Expected backend health response:
+
+```json
+{"status":true}
+```
+
+Expected sandbox config should include:
+
+- `workspace_root: /workspace`
+- `tmp_root: /tmp`
+- `python.executable: /opt/venvs/default/bin/python3`
+
+Useful sandbox checks:
+
+```bash
+ls -la ~/.open-webui/workdir
+find ~/.open-webui/workdir/sessions -maxdepth 3 -type d | head
+docker logs open-webui-sandbox --tail 100
+```
+
+### Stop
+
+Stop backend by terminating the `uvicorn open_webui.main:app` process.
+
+Stop sandbox with:
+
+```bash
+cd ~/code/open-webui
+docker compose -f docker-compose.sandbox.yaml down
+```
+
+### Fast failure diagnosis
+
+- If `127.0.0.1:8080` is healthy but command execution fails, check whether the sandbox container on `127.0.0.1:8765` is actually up.
+- If uploaded files are not visible to the model, inspect `~/.open-webui/workdir/sessions/chat_<chat_id>/inputs/<message_id>/`.
+- If terminal tools do not appear in chat, verify the Admin terminal server connection still points to `http://127.0.0.1:8765`.
+- If the backend exits with `No module named uvicorn`, you are not using the project `.venv` Python.
+- If frontend code changed but the `8080` UI still looks old, rebuild `build/` with `npm run build`.
+
 ## How to Install 🚀
 
 ### Installation via Python pip 🐍
