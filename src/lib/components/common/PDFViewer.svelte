@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount, onDestroy } from 'svelte';
+	import { onMount, onDestroy, tick } from 'svelte';
 	import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
 	import panzoom, { type PanZoom } from 'panzoom';
 	import Spinner from './Spinner.svelte';
@@ -17,6 +17,27 @@
 	let zoomLevel = 1;
 	let rerenderTimer: ReturnType<typeof setTimeout> | null = null;
 	let lastRenderedZoom = 1;
+
+	const getContainerWidth = () => {
+		const clientWidth = outerContainer?.clientWidth ?? 0;
+		const rectWidth = outerContainer?.getBoundingClientRect?.().width ?? 0;
+		return Math.max(clientWidth, rectWidth);
+	};
+
+	const waitForContainerWidth = async () => {
+		await tick();
+
+		for (let attempt = 0; attempt < 10; attempt++) {
+			const width = getContainerWidth();
+			if (width > 0) {
+				return width;
+			}
+
+			await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+		}
+
+		return 800;
+	};
 
 	const initPanzoom = () => {
 		if (pzInstance) {
@@ -85,7 +106,7 @@
 	const rerenderPages = async (forZoom: number) => {
 		if (!pdfDoc || !sceneElement) return;
 		const dpr = window.devicePixelRatio || 1;
-		const containerWidth = outerContainer?.clientWidth || 800;
+		const containerWidth = Math.max(getContainerWidth(), 800);
 
 		const canvases = sceneElement.querySelectorAll('canvas');
 
@@ -115,13 +136,13 @@
 		sceneElement.innerHTML = '';
 
 		const dpr = window.devicePixelRatio || 1;
+		const containerWidth = await waitForContainerWidth();
 
 		for (let i = 1; i <= pdfDoc.numPages; i++) {
 			const page = await pdfDoc.getPage(i);
 			const viewport = page.getViewport({ scale: 1 });
 
 			// Scale to fit container width
-			const containerWidth = outerContainer?.clientWidth || 800;
 			const cssScale = containerWidth / viewport.width;
 			const renderScale = cssScale * dpr;
 			const scaledViewport = page.getViewport({ scale: renderScale });

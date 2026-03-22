@@ -298,7 +298,7 @@
 	};
 
 	const loadContent = async () => {
-		selectedTab = '';
+		selectedTab = 'preview';
 		expandedContent = false;
 		textContent = '';
 		textContentError = '';
@@ -506,32 +506,6 @@
 					</div>
 				{/if}
 
-					{#if isAudio || isPDF || isExcel || isCode || isMarkdown || isDocx || isPptx}
-					<div
-						class="flex mb-2.5 scrollbar-none overflow-x-auto w-full border-b border-gray-50 dark:border-gray-850/30 text-center text-sm font-medium bg-transparent dark:text-gray-200"
-					>
-						<button
-							class="min-w-fit py-1.5 px-4 border-b {selectedTab === ''
-								? ' '
-								: ' border-transparent text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition"
-							type="button"
-							on:click={() => {
-								selectedTab = '';
-							}}>{$i18n.t('Content')}</button
-						>
-
-						<button
-							class="min-w-fit py-1.5 px-4 border-b {selectedTab === 'preview'
-								? ' '
-								: ' border-transparent text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition"
-							type="button"
-							on:click={() => {
-								selectedTab = 'preview';
-							}}>{$i18n.t('Preview')}</button
-						>
-					</div>
-				{/if}
-
 					{#if isImage}
 						<div class="relative w-full max-h-[70vh] overflow-hidden">
 						<div class="absolute top-2 right-2 z-10">
@@ -554,43 +528,7 @@
 							/>
 						</div>
 					</div>
-					{:else if selectedTab === ''}
-						{#if getResolvedTextContent() || textContentError}
-							{@const rawContent = getResolvedTextContent().trim() || 'No content'}
-							{@const isTruncated =
-								($settings?.renderMarkdownInPreviews ?? true) &&
-								rawContent.length > CONTENT_PREVIEW_LIMIT &&
-								!expandedContent}
-							{#if textContentError}
-								<div class="text-red-500 text-sm p-4">{textContentError}</div>
-							{:else if $settings?.renderMarkdownInPreviews ?? true}
-								<div
-									class="max-h-96 overflow-scroll scrollbar-hidden text-sm prose dark:prose-invert max-w-full"
-							>
-								<Markdown
-									content={isTruncated ? rawContent.slice(0, CONTENT_PREVIEW_LIMIT) : rawContent}
-									id="file-preview"
-								/>
-							</div>
-							{#if isTruncated}
-								<button
-									class="mt-1 text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 transition"
-									on:click={() => {
-										expandedContent = true;
-									}}
-								>
-									{$i18n.t('Show all ({{COUNT}} characters)', {
-										COUNT: rawContent.length.toLocaleString()
-									})}
-								</button>
-							{/if}
-						{:else}
-							<div class="max-h-96 overflow-scroll scrollbar-hidden text-xs whitespace-pre-wrap">
-								{rawContent}
-							</div>
-						{/if}
-						{/if}
-					{:else if selectedTab === 'preview'}
+					{:else}
 						{#if isAudio}
 							<audio
 								src={getFileContentUrl()}
@@ -652,9 +590,43 @@
 							>
 								<Markdown content={getResolvedTextContent()} id="markdown-viewer" />
 							</div>
-					{:else if isDocx}
-						{#if docxError}
-							<div class="text-red-500 text-sm p-4">{docxError}</div>
+						{:else if getResolvedTextContent() || textContentError}
+							{@const rawContent = getResolvedTextContent().trim() || 'No content'}
+							{@const isTruncated =
+								($settings?.renderMarkdownInPreviews ?? true) &&
+								rawContent.length > CONTENT_PREVIEW_LIMIT &&
+								!expandedContent}
+							{#if textContentError}
+								<div class="text-red-500 text-sm p-4">{textContentError}</div>
+							{:else if $settings?.renderMarkdownInPreviews ?? true}
+								<div
+									class="max-h-96 overflow-scroll scrollbar-hidden text-sm prose dark:prose-invert max-w-full"
+								>
+									<Markdown
+										content={isTruncated ? rawContent.slice(0, CONTENT_PREVIEW_LIMIT) : rawContent}
+										id="file-preview"
+									/>
+								</div>
+								{#if isTruncated}
+									<button
+										class="mt-1 text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 transition"
+										on:click={() => {
+											expandedContent = true;
+										}}
+									>
+										{$i18n.t('Show all ({{COUNT}} characters)', {
+											COUNT: rawContent.length.toLocaleString()
+										})}
+									</button>
+								{/if}
+							{:else}
+								<div class="max-h-96 overflow-scroll scrollbar-hidden text-xs whitespace-pre-wrap">
+									{rawContent}
+								</div>
+							{/if}
+						{:else if isDocx}
+							{#if docxError}
+								<div class="text-red-500 text-sm p-4">{docxError}</div>
 						{:else if docxHtml}
 							<div
 								class="office-preview max-h-[60vh] overflow-auto p-4 prose dark:prose-invert max-w-full text-sm"
