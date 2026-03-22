@@ -12,6 +12,14 @@ export default defineConfig({
 					src: 'node_modules/onnxruntime-web/dist/*.jsep.*',
 
 					dest: 'wasm'
+				},
+				{
+					src: 'node_modules/pdfjs-dist/cmaps/*',
+					dest: 'pdfjs/cmaps'
+				},
+				{
+					src: 'node_modules/pdfjs-dist/standard_fonts/*',
+					dest: 'pdfjs/standard_fonts'
 				}
 			]
 		})

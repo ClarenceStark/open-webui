@@ -453,8 +453,9 @@ def check_model_access(user, model, db=None):
     else:
         model_info = Models.get_model_by_id(model.get("id"), db=db)
         if not model_info:
-            raise Exception("Model not found")
-        elif not (
+            return
+
+        if not (
             user.id == model_info.user_id
             or AccessGrants.has_access(
                 user_id=user.id,
@@ -473,13 +474,11 @@ def get_filtered_models(models, user, db=None):
         user.role == "user"
         or (user.role == "admin" and not BYPASS_ADMIN_ACCESS_CONTROL)
     ) and not BYPASS_MODEL_ACCESS_CONTROL:
-        model_infos = {}
-        for model in models:
-            if model.get("arena"):
-                continue
-            info = model.get("info")
-            if info:
-                model_infos[model["id"]] = info
+        model_ids = [model["id"] for model in models if not model.get("arena")]
+        model_infos = {
+            model_info.id: model_info
+            for model_info in Models.get_models_by_ids(model_ids, db=db)
+        }
 
         user_group_ids = {
             group.id for group in Groups.get_groups_by_member_id(user.id, db=db)
@@ -510,13 +509,16 @@ def get_filtered_models(models, user, db=None):
                 continue
 
             model_info = model_infos.get(model["id"])
-            if model_info:
-                if (
-                    (user.role == "admin" and BYPASS_ADMIN_ACCESS_CONTROL)
-                    or user.id == model_info.get("user_id")
-                    or model["id"] in accessible_model_ids
-                ):
-                    filtered_models.append(model)
+            if model_info is None:
+                filtered_models.append(model)
+                continue
+
+            if (
+                (user.role == "admin" and BYPASS_ADMIN_ACCESS_CONTROL)
+                or user.id == model_info.user_id
+                or model["id"] in accessible_model_ids
+            ):
+                filtered_models.append(model)
 
         return filtered_models
     else:

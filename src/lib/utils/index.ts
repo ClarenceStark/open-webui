@@ -1669,6 +1669,10 @@ async function ensurePDFjsLoaded() {
 	return window.pdfjsLib;
 }
 
+function getPdfAssetBaseUrl() {
+	return new URL('/pdfjs/', window.location.origin).toString();
+}
+
 export const extractContentFromFile = async (file: File) => {
 	// Known text file extensions for extra fallback
 	const textExtensions = [
@@ -1695,7 +1699,14 @@ export const extractContentFromFile = async (file: File) => {
 	async function extractPdfText(file: File) {
 		const pdfjsLib = await ensurePDFjsLoaded();
 		const arrayBuffer = await file.arrayBuffer();
-		const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+		const pdfAssetBaseUrl = getPdfAssetBaseUrl();
+		const pdf = await pdfjsLib.getDocument({
+			data: arrayBuffer,
+			cMapUrl: `${pdfAssetBaseUrl}cmaps/`,
+			cMapPacked: true,
+			standardFontDataUrl: `${pdfAssetBaseUrl}standard_fonts/`,
+			useWorkerFetch: false
+		}).promise;
 		let allText = '';
 		for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
 			const page = await pdf.getPage(pageNum);
