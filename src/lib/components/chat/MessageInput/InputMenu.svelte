@@ -11,6 +11,7 @@
 
 	import Dropdown from '$lib/components/common/Dropdown.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
+	import Switch from '$lib/components/common/Switch.svelte';
 	import DocumentArrowUp from '$lib/components/icons/DocumentArrowUp.svelte';
 	import Camera from '$lib/components/icons/Camera.svelte';
 	import Note from '$lib/components/icons/Note.svelte';
@@ -35,6 +36,8 @@
 
 	export let selectedModels: string[] = [];
 	export let fileUploadCapableModels: string[] = [];
+	export let showWebSearchButton = false;
+	export let webSearchEnabled = false;
 
 	export let screenCaptureHandler: Function;
 	export let uploadFilesHandler: Function;
@@ -207,6 +210,29 @@
 							<div class="line-clamp-1">{$i18n.t('Attach Webpage')}</div>
 						</DropdownMenu.Item>
 					</Tooltip>
+
+					{#if showWebSearchButton}
+						<Tooltip content={$i18n.t('Search the internet')} className="w-full">
+							<button
+								type="button"
+								class="flex w-full justify-between gap-2 items-center px-3 py-1.5 text-sm cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800 rounded-xl"
+								aria-label={$i18n.t('Toggle web search')}
+								aria-pressed={webSearchEnabled}
+								on:click={() => {
+									webSearchEnabled = !webSearchEnabled;
+								}}
+							>
+								<div class="flex flex-1 gap-2 items-center truncate">
+									<GlobeAlt />
+									<div class="line-clamp-1">{$i18n.t('Web Search')}</div>
+								</div>
+
+								<div class="shrink-0">
+									<Switch state={webSearchEnabled} />
+								</div>
+							</button>
+						</Tooltip>
+					{/if}
 
 					{#if $config?.features?.enable_notes ?? false}
 						<Tooltip

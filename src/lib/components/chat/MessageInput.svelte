@@ -80,7 +80,6 @@
 	import Spinner from '../common/Spinner.svelte';
 
 	import XMark from '../icons/XMark.svelte';
-	import GlobeAlt from '../icons/GlobeAlt.svelte';
 	import Photo from '../icons/Photo.svelte';
 	import Wrench from '../icons/Wrench.svelte';
 	import Sparkles from '../icons/Sparkles.svelte';
@@ -88,8 +87,6 @@
 	import InputVariablesModal from './MessageInput/InputVariablesModal.svelte';
 	import Voice from '../icons/Voice.svelte';
 	import Cloud from '../icons/Cloud.svelte';
-	import IntegrationsMenu from './MessageInput/IntegrationsMenu.svelte';
-	import TerminalMenu from './MessageInput/TerminalMenu.svelte';
 	import Component from '../icons/Component.svelte';
 	import PlusAlt from '../icons/PlusAlt.svelte';
 	import Dropdown from '../common/Dropdown.svelte';
@@ -148,8 +145,6 @@
 	export let webSearchEnabled = false;
 	export let codeInterpreterEnabled = false;
 
-	let showTerminalMenu = false;
-
 	export let messageQueue: { id: string; prompt: string; files: any[] }[] = [];
 	export let onQueueSendNow: (id: string) => void = () => {};
 	export let onQueueEdit: (id: string) => void = () => {};
@@ -166,11 +161,6 @@
 	let showValvesModal = false;
 	let selectedValvesType = 'tool'; // 'tool' or 'function'
 	let selectedValvesItemId = null;
-	let integrationsMenuCloseOnOutsideClick = true;
-
-	$: if (!showValvesModal) {
-		integrationsMenuCloseOnOutsideClick = true;
-	}
 
 	$: onChange({
 		prompt,
@@ -1089,9 +1079,6 @@
 	on:save={async () => {
 		await tick();
 	}}
-	on:close={() => {
-		integrationsMenuCloseOnOutsideClick = true;
-	}}
 />
 
 <InputModal
@@ -1559,8 +1546,10 @@
 								<div class="ml-1 self-end flex items-center flex-1 max-w-[80%]">
 									<InputMenu
 										bind:files
+										bind:webSearchEnabled
 										selectedModels={atSelectedModel ? [atSelectedModel.id] : selectedModels}
 										{fileUploadCapableModels}
+										{showWebSearchButton}
 										{screenCaptureHandler}
 										{inputFilesHandler}
 										uploadFilesHandler={() => {
@@ -1700,25 +1689,6 @@
 											{/if}
 										{/each}
 
-										{#if webSearchEnabled}
-											<Tooltip content={$i18n.t('Web Search')} placement="top">
-												<button
-													on:click|preventDefault={() => (webSearchEnabled = !webSearchEnabled)}
-													type="button"
-													aria-label={$i18n.t('Toggle web search')}
-													class="chat-shell-toggle-pill group p-[7px] flex gap-1.5 items-center text-sm rounded-full transition-colors duration-300 focus:outline-hidden max-w-full overflow-hidden {webSearchEnabled ||
-													($settings?.webSearch ?? false) === 'always'
-														? 'chat-shell-toggle-pill-active'
-														: ''}"
-												>
-													<GlobeAlt className="size-4" strokeWidth="1.75" />
-													<div class="hidden group-hover:block">
-														<XMark className="size-4" strokeWidth="1.75" />
-													</div>
-												</button>
-											</Tooltip>
-										{/if}
-
 										{#if imageGenerationEnabled}
 											<Tooltip content={$i18n.t('Image')} placement="top">
 												<button
@@ -1814,13 +1784,8 @@
 											</Tooltip>
 										{/if}
 
-										{#if !history?.currentId || history.messages[history.currentId]?.done == true}
-											<!-- Terminal Server Selector -->
-											{#if ($terminalServers ?? []).length > 0 || ($settings?.terminalServers ?? []).some((s) => s.url)}
-												<TerminalMenu bind:show={showTerminalMenu} />
-											{/if}
-
-											{#if $_user?.role === 'admin' || ($_user?.permissions?.chat?.stt ?? true)}
+											{#if !history?.currentId || history.messages[history.currentId]?.done == true}
+												{#if $_user?.role === 'admin' || ($_user?.permissions?.chat?.stt ?? true)}
 												<!-- {$i18n.t('Record voice')} -->
 												<Tooltip content={$i18n.t('Dictate')}>
 													<button
