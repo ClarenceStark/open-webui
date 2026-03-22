@@ -20,6 +20,7 @@
 
 	import Modal from './Modal.svelte';
 	import XMark from '../icons/XMark.svelte';
+	import Download from '../icons/Download.svelte';
 	import Switch from './Switch.svelte';
 	import Tooltip from './Tooltip.svelte';
 	import dayjs from 'dayjs';
@@ -107,6 +108,18 @@
 
 		const fileId = getFileId();
 		return fileId ? `${WEBUI_API_BASE_URL}/files/${fileId}/content` : null;
+	};
+
+	const getFileDownloadUrl = () => {
+		const fileUrl = getFileContentUrl();
+		if (!fileUrl) return null;
+		return `${fileUrl}${fileUrl.includes('?') ? '&' : '?'}attachment=true`;
+	};
+
+	const downloadFile = () => {
+		const downloadUrl = getFileDownloadUrl();
+		if (!downloadUrl) return;
+		window.open(downloadUrl, '_blank');
 	};
 
 	const getResolvedTextContent = () => item?.file?.data?.content ?? item?.content ?? textContent ?? '';
@@ -365,35 +378,37 @@
 
 <Modal bind:show size="lg">
 	<div class="font-primary px-4.5 py-3.5 w-full flex flex-col justify-center dark:text-gray-400">
-		<div class=" pb-2">
-			<div class="flex items-start justify-between">
-				<div>
-					<div class=" font-medium text-lg dark:text-gray-100">
-						<a
-							href="#"
-							class="hover:underline line-clamp-1"
-							on:click|preventDefault={() => {
-								const fileUrl = item.type === 'file' ? getFileContentUrl() : item?.url;
-								if (!isPDF && fileUrl) {
-									window.open(fileUrl, '_blank');
-								}
+			<div class=" pb-2">
+				<div class="flex items-start justify-between">
+					<div>
+						<div class=" font-medium text-lg dark:text-gray-100">
+							<div class="line-clamp-1">{item?.name ?? 'File'}</div>
+						</div>
+					</div>
+
+					<div class="flex items-center gap-1">
+						{#if item?.type === 'file' && getFileDownloadUrl()}
+							<Tooltip content={$i18n.t('Download')}>
+								<button
+									class="p-1 rounded-md hover:bg-black/5 dark:hover:bg-white/5 transition"
+									aria-label={$i18n.t('Download')}
+									on:click={downloadFile}
+								>
+									<Download className="size-4" />
+								</button>
+							</Tooltip>
+						{/if}
+
+						<button
+							aria-label={$i18n.t('Close')}
+							on:click={() => {
+								show = false;
 							}}
 						>
-							{item?.name ?? 'File'}
-						</a>
+							<XMark />
+						</button>
 					</div>
 				</div>
-
-				<div>
-					<button
-						on:click={() => {
-							show = false;
-						}}
-					>
-						<XMark />
-					</button>
-				</div>
-			</div>
 
 			<div>
 				<div class="flex flex-col items-center md:flex-row gap-1 justify-between w-full">
