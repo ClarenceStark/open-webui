@@ -89,6 +89,21 @@ import copy
 log = logging.getLogger(__name__)
 
 
+def sanitize_terminal_scope_component(value: Any, fallback: str) -> str:
+    raw = str(value or fallback)
+    return re.sub(r"[^A-Za-z0-9._-]", "_", raw)
+
+
+def build_terminal_session_scope(metadata: Optional[dict]) -> str:
+    metadata = metadata or {}
+    if metadata.get("chat_id"):
+        return f"chat_{sanitize_terminal_scope_component(metadata.get('chat_id'), 'chat')}"
+    return (
+        "session_"
+        + sanitize_terminal_scope_component(metadata.get("session_id"), "default")
+    )
+
+
 def get_async_tool_function_and_apply_extra_params(
     function: Callable, extra_params: dict
 ) -> Callable[..., Awaitable]:
@@ -1064,10 +1079,17 @@ async def get_terminal_tools(
         # Inject CWD into command execution tool descriptions
         tool_spec = clean_openai_tool_schema(spec)
         if function_name in {"run_command", "exec_command"} and terminal_cwd:
+            session_root = f"/workspace/sessions/{build_terminal_session_scope(metadata)}"
             tool_spec["description"] = (
                 tool_spec.get("description", "")
                 + f"\n\nThe current working directory is: {terminal_cwd}"
-                + "\nIf a command fails because a Python package is missing, you may proactively run python3 -m pip install <package> in the sandbox and retry."
+                + f"\nTreat the current chat session as your only workspace boundary. The session root is: {session_root}"
+                + "\nFor Python work, default to a local .venv in the current working directory or repository."
+                + "\nIf .venv does not exist, you may create and configure it yourself with python3 -m venv .venv, install dependencies into it, and then use .venv/bin/python or .venv/bin/pip for subsequent commands."
+                + "\nIf a local .venv already exists, reuse it instead of creating another environment."
+                + "\nDo not rely on system Python or shared environments such as /workspace/venvs/default or /workspace/venvs/data unless the user explicitly asks for them."
+                + "\nDo not read from or write to sibling session directories under /workspace/sessions/ that are outside the current session root."
+                + "\nIf a command fails because a Python package is missing, install it inside the local .venv and retry."
                 + "\nIf your command prints the exact output file path on its own line, the system may automatically upload that generated file back into chat for the user."
             )
         if function_name == "view_image":

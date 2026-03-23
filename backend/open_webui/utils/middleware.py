@@ -505,6 +505,41 @@ def build_terminal_attachment_prompt(mounted_files: list[dict], target_dir: str)
     return "<sandbox_files>\n" + "\n".join(lines) + "\n</sandbox_files>"
 
 
+def sanitize_terminal_scope_component(value: Optional[str], fallback: str) -> str:
+    raw = str(value or fallback)
+    return re.sub(r"[^A-Za-z0-9._-]", "_", raw)
+
+
+def build_terminal_session_scope(metadata: Optional[dict]) -> str:
+    metadata = metadata or {}
+    if metadata.get("chat_id"):
+        return f"chat_{sanitize_terminal_scope_component(metadata.get('chat_id'), 'chat')}"
+
+    return (
+        f"session_{sanitize_terminal_scope_component(metadata.get('session_id'), 'default')}"
+    )
+
+
+def build_terminal_session_root(metadata: Optional[dict]) -> str:
+    return f"/workspace/sessions/{build_terminal_session_scope(metadata)}"
+
+
+def build_terminal_execution_prompt(metadata: Optional[dict]) -> str:
+    session_root = build_terminal_session_root(metadata)
+    lines = [
+        "You are operating inside a sandbox terminal scoped to the current chat session.",
+        f"Treat this session root as your working boundary: {session_root}",
+        "For Python work, prefer a project-local .venv inside the current working directory or repository within this session.",
+        "If .venv does not exist yet, you may create and configure it yourself with python3 -m venv .venv, upgrade pip inside it, install the required packages there, and then run commands with .venv/bin/python or .venv/bin/pip.",
+        "If a local .venv already exists, reuse it instead of creating another environment.",
+        "Do not rely on the system Python or shared environments such as /workspace/venvs/default or /workspace/venvs/data unless the user explicitly requests that exact environment.",
+        "Do not read from or write to sibling session directories such as /workspace/sessions/chat_* or /workspace/sessions/session_* that are outside the current session root.",
+        "Do not inspect, reuse, or depend on files from another session's inputs, outputs, artifacts, or tmp directories.",
+        "If a required file is missing from the current session, ask the user to upload it again or copy it into the current session workspace before continuing.",
+    ]
+    return "<sandbox_rules>\n" + "\n".join(lines) + "\n</sandbox_rules>"
+
+
 TERMINAL_TOOL_NAMES = {
     "exec_command",
     "run_command",
@@ -728,21 +763,13 @@ async def sync_chat_files_to_terminal(
             detail="No sandbox terminal is available for attached files",
         )
 
-    def sanitize_path_component(value: Optional[str], fallback: str) -> str:
-        raw = str(value or fallback)
-        return re.sub(r"[^A-Za-z0-9._-]", "_", raw)
-
-    session_scope = (
-        f"chat_{sanitize_path_component(metadata.get('chat_id'), 'chat')}"
-        if metadata.get("chat_id")
-        else f"session_{sanitize_path_component(metadata.get('session_id'), 'default')}"
-    )
+    session_scope = build_terminal_session_scope(metadata)
 
     target_dir = (
         f"/workspace/sessions/"
         f"{session_scope}/"
         f"inputs/"
-        f"{sanitize_path_component(metadata.get('message_id'), 'message')}"
+        f"{sanitize_terminal_scope_component(metadata.get('message_id'), 'message')}"
     )
 
     headers = copy.deepcopy(terminal_server.get("headers", {}) or {})
@@ -3842,6 +3869,13 @@ async def process_chat_payload(request, form_data, user, metadata, model):
         "files": files,
     }
     form_data["metadata"] = metadata
+
+    if terminal_id:
+        form_data["messages"] = add_or_update_system_message(
+            build_terminal_execution_prompt(metadata),
+            form_data["messages"],
+            append=True,
+        )
 
     if terminal_id and files:
         mounted_terminal_files = await sync_chat_files_to_terminal(

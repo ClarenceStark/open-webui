@@ -122,6 +122,24 @@ Container Python environments exposed into the workspace:
 - `/workspace/venvs/default`
 - `/workspace/venvs/data`
 
+### Sandbox Execution Rules
+
+When the AI executes commands inside the sandbox, treat the current chat session directory as the only working boundary by default.
+
+- For Python execution inside the sandbox, default to a project-local `.venv` in the current working directory.
+- The AI may create and configure `.venv` on its own when needed, including `python3 -m venv .venv`, upgrading `pip`, and installing required packages into that `.venv`.
+- After `.venv` exists, use `.venv/bin/python`, `.venv/bin/pip`, or `. .venv/bin/activate` for all Python/package commands instead of relying on system Python.
+- Do not default to shared interpreters such as `/workspace/venvs/default` or `/workspace/venvs/data` when a task can run in the local `.venv`. Only use them if the user explicitly asks for them or the task already requires that exact environment.
+- If a repository already contains a dedicated `.venv`, reuse it instead of creating a second environment.
+
+Sandbox file access must stay inside the current chat session scope unless the user explicitly asks otherwise.
+
+- Do not read from or write to sibling session directories such as `/workspace/sessions/chat_*` that belong to other chats.
+- Do not inspect, reuse, or depend on files from another session's `inputs/`, `outputs/`, `artifacts/`, or `tmp/` directories.
+- Do not treat files from other sessions as implicit context, even if they are visible from the filesystem.
+- If required material is missing from the current session, ask the user to provide it again or copy it into the current session workspace first.
+- When cleaning up or debugging, avoid commands that scan the whole `sessions/` tree unless the user explicitly requests cross-session investigation.
+
 Key paths:
 
 - Frontend build output: `~/code/open-webui/build`
