@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import time
+import uuid
 from typing import Any
 
 from codex_app_server import TextInput
@@ -100,27 +101,106 @@ async def _persist_codex_thread_id(chat_id: str, thread_id: str) -> None:
     await asyncio.to_thread(Chats.update_chat_by_id, chat_id, payload)
 
 
+def _build_codex_message(base_message: dict[str, Any], message_id: str, parent_id: str | None) -> dict[str, Any]:
+    message = {
+        "id": message_id,
+        "parentId": parent_id,
+        "childrenIds": [],
+        "role": "assistant",
+        "content": "",
+        "done": False,
+        "timestamp": int(time.time()),
+    }
+
+    for key in ("model", "modelName", "modelIdx", "selectedModelId", "arena"):
+        if key in base_message:
+            message[key] = base_message[key]
+
+    return message
+
+
+async def _ensure_agent_message(
+    item_id: str,
+    state: dict[str, Any],
+    event_emitter,
+) -> str:
+    mapped_id = state["item_message_ids"].get(item_id)
+    if mapped_id:
+        return mapped_id
+
+    if state["last_message_id"] is None:
+        mapped_id = state["root_message_id"]
+        state["item_message_ids"][item_id] = mapped_id
+        state["last_message_id"] = mapped_id
+        return mapped_id
+
+    mapped_id = str(uuid.uuid4())
+    message = _build_codex_message(
+        state["root_message"],
+        mapped_id,
+        state["last_message_id"],
+    )
+    state["item_message_ids"][item_id] = mapped_id
+    state["last_message_id"] = mapped_id
+
+    await event_emitter(
+        {
+            "type": "chat:message:create",
+            "message_id": mapped_id,
+            "data": {"message": message},
+        }
+    )
+
+    return mapped_id
+
+
+async def _emit_to_message(
+    event_emitter,
+    message_id: str | None,
+    event_type: str,
+    data: dict[str, Any],
+) -> None:
+    payload: dict[str, Any] = {"type": event_type, "data": data}
+    if message_id:
+        payload["message_id"] = message_id
+    await event_emitter(payload)
+
+
 async def translate_and_emit(
     notification,
     event_emitter,
-    full_response: list[str],
+    message_state: dict[str, Any],
     session,
 ) -> None:
     method = notification.method
     payload = notification.payload
 
     if method == "item/agentMessage/delta":
-        full_response.append(payload.delta)
-        await event_emitter({"type": "message", "data": {"content": payload.delta}})
+        message_id = await _ensure_agent_message(payload.item_id, message_state, event_emitter)
+        current = message_state["item_contents"].get(payload.item_id, "")
+        message_state["item_contents"][payload.item_id] = current + payload.delta
+        await _emit_to_message(
+            event_emitter,
+            message_id,
+            "message",
+            {"content": payload.delta},
+        )
         return
 
     if method == "item/started" and isinstance(payload, ItemStartedNotification):
+        item = _unwrap_item(payload.item)
+        message_id = (
+            await _ensure_agent_message(item.id, message_state, event_emitter)
+            if isinstance(item, AgentMessageThreadItem)
+            else (message_state["last_message_id"] or message_state["root_message_id"])
+        )
         await event_emitter(
             {
                 "type": "status",
+                "message_id": message_id,
                 "data": {
                     "action": "codex",
-                    "description": describe_item(payload.item),
+                    "description": describe_item(item),
                     "done": False,
                 },
             }
@@ -129,9 +209,15 @@ async def translate_and_emit(
 
     if method == "item/completed" and isinstance(payload, ItemCompletedNotification):
         item = _unwrap_item(payload.item)
+        message_id = (
+            await _ensure_agent_message(item.id, message_state, event_emitter)
+            if isinstance(item, AgentMessageThreadItem)
+            else (message_state["last_message_id"] or message_state["root_message_id"])
+        )
         await event_emitter(
             {
                 "type": "status",
+                "message_id": message_id,
                 "data": {
                     "action": "codex",
                     "description": describe_item(item),
@@ -141,69 +227,91 @@ async def translate_and_emit(
         )
 
         if isinstance(item, AgentMessageThreadItem) and item.text:
-            current = "".join(full_response)
+            current = message_state["item_contents"].get(item.id, "")
             if not current:
-                full_response[:] = [item.text]
-                await event_emitter({"type": "replace", "data": {"content": item.text}})
+                message_state["item_contents"][item.id] = item.text
+                await _emit_to_message(
+                    event_emitter,
+                    message_id,
+                    "replace",
+                    {"content": item.text},
+                )
             elif item.text.startswith(current):
                 suffix = item.text[len(current) :]
                 if suffix:
-                    full_response.append(suffix)
-                    await event_emitter({"type": "message", "data": {"content": suffix}})
+                    message_state["item_contents"][item.id] = item.text
+                    await _emit_to_message(
+                        event_emitter,
+                        message_id,
+                        "message",
+                        {"content": suffix},
+                    )
             elif item.text != current:
-                full_response[:] = [item.text]
-                await event_emitter({"type": "replace", "data": {"content": item.text}})
+                message_state["item_contents"][item.id] = item.text
+                await _emit_to_message(
+                    event_emitter,
+                    message_id,
+                    "replace",
+                    {"content": item.text},
+                )
+
+            await _emit_to_message(
+                event_emitter,
+                message_id,
+                "chat:message:update",
+                {"message": {"done": True}},
+            )
         return
 
     if method == "item/commandExecution/outputDelta":
-        await event_emitter(
+        await _emit_to_message(
+            event_emitter,
+            message_state["last_message_id"] or message_state["root_message_id"],
+            "status",
             {
-                "type": "status",
-                "data": {
-                    "action": "command_output",
-                    "description": payload.delta,
-                    "done": False,
-                },
-            }
+                "action": "command_output",
+                "description": payload.delta,
+                "done": False,
+            },
         )
         return
 
     if method == "item/fileChange/outputDelta":
-        await event_emitter(
+        await _emit_to_message(
+            event_emitter,
+            message_state["last_message_id"] or message_state["root_message_id"],
+            "status",
             {
-                "type": "status",
-                "data": {
-                    "action": "file_change",
-                    "description": payload.delta,
-                    "done": False,
-                },
-            }
+                "action": "file_change",
+                "description": payload.delta,
+                "done": False,
+            },
         )
         return
 
     if method == "item/plan/delta" and isinstance(payload, PlanDeltaNotification):
-        await event_emitter(
+        await _emit_to_message(
+            event_emitter,
+            message_state["last_message_id"] or message_state["root_message_id"],
+            "status",
             {
-                "type": "status",
-                "data": {
-                    "action": "planning",
-                    "description": payload.delta,
-                    "done": False,
-                },
-            }
+                "action": "planning",
+                "description": payload.delta,
+                "done": False,
+            },
         )
         return
 
     if method == "turn/plan/updated" and isinstance(payload, TurnPlanUpdatedNotification):
-        await event_emitter(
+        await _emit_to_message(
+            event_emitter,
+            message_state["last_message_id"] or message_state["root_message_id"],
+            "status",
             {
-                "type": "status",
-                "data": {
-                    "action": "planning",
-                    "description": _build_plan_summary(payload),
-                    "done": False,
-                },
-            }
+                "action": "planning",
+                "description": _build_plan_summary(payload),
+                "done": False,
+            },
         )
         return
 
@@ -214,21 +322,25 @@ async def translate_and_emit(
         return
 
     if method == "error" and isinstance(payload, ErrorNotification):
-        await event_emitter(
+        await _emit_to_message(
+            event_emitter,
+            message_state["last_message_id"] or message_state["root_message_id"],
+            "chat:message:error",
             {
-                "type": "chat:message:error",
-                "data": {"error": {"content": payload.error.message}},
-            }
+                "error": {"content": payload.error.message},
+            },
         )
         return
 
     if method == "turn/completed" and isinstance(payload, TurnCompletedNotification):
         if payload.turn.error:
-            await event_emitter(
+            await _emit_to_message(
+                event_emitter,
+                message_state["last_message_id"] or message_state["root_message_id"],
+                "chat:message:error",
                 {
-                    "type": "chat:message:error",
-                    "data": {"error": {"content": payload.turn.error.message}},
-                }
+                    "error": {"content": payload.turn.error.message},
+                },
             )
 
 
@@ -274,7 +386,18 @@ async def codex_chat_completion(
         event_caller=event_caller,
     )
 
-    full_response: list[str] = []
+    root_message = await asyncio.to_thread(
+        Chats.get_message_by_id_and_message_id,
+        chat_id,
+        message_id,
+    ) or {}
+    message_state = {
+        "root_message_id": message_id,
+        "root_message": root_message,
+        "last_message_id": None,
+        "item_message_ids": {},
+        "item_contents": {},
+    }
     turn_handle = None
 
     async with session.turn_lock:
@@ -290,7 +413,7 @@ async def codex_chat_completion(
                 await translate_and_emit(
                     notification,
                     event_emitter,
-                    full_response,
+                    message_state,
                     session,
                 )
         finally:

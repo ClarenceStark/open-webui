@@ -676,6 +676,74 @@ class ChatTable:
 
         return self.update_chat_by_id(id, chat)
 
+    def insert_message_to_chat_by_id_and_message_id(
+        self, id: str, message_id: str, message: dict
+    ) -> Optional[ChatModel]:
+        with get_db_context() as db:
+            chat_model = self.get_chat_by_id(id, db=db)
+            if chat_model is None:
+                return None
+
+            if isinstance(message.get("content"), str):
+                message["content"] = sanitize_text_for_db(message["content"])
+
+            message = _normalize_assistant_artifact_message(message)
+
+            chat = chat_model.chat
+            history = chat.get("history", {})
+            messages = history.get("messages", {}) or {}
+
+            existing = messages.get(message_id, {}) or {}
+            merged_message = {
+                **existing,
+                **message,
+                "id": message_id,
+                "childrenIds": message.get("childrenIds")
+                or existing.get("childrenIds")
+                or [],
+            }
+
+            parent_id = merged_message.get("parentId")
+            if parent_id and parent_id in messages:
+                parent_message = messages[parent_id]
+                parent_children = list(parent_message.get("childrenIds", []) or [])
+                if message_id not in parent_children:
+                    parent_children.append(message_id)
+                    parent_message["childrenIds"] = parent_children
+                    messages[parent_id] = parent_message
+
+            messages[message_id] = merged_message
+            history["messages"] = messages
+            history["currentId"] = message_id
+            chat["history"] = history
+
+            self.update_chat_by_id(id, chat, db=db)
+
+            try:
+                ChatMessages.upsert_message(
+                    message_id=message_id,
+                    chat_id=id,
+                    user_id=chat_model.user_id,
+                    data=merged_message,
+                    db=db,
+                )
+            except Exception as e:
+                log.warning(f"Failed to sync inserted chat_message: {e}")
+
+            if parent_id and parent_id in messages:
+                try:
+                    ChatMessages.upsert_message(
+                        message_id=parent_id,
+                        chat_id=id,
+                        user_id=chat_model.user_id,
+                        data=messages[parent_id],
+                        db=db,
+                    )
+                except Exception as e:
+                    log.warning(f"Failed to sync parent chat_message: {e}")
+
+            return chat_model
+
     def add_message_status_to_chat_by_id_and_message_id(
         self, id: str, message_id: str, status: dict
     ) -> Optional[ChatModel]:

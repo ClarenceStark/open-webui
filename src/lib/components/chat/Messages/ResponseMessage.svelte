@@ -1,3 +1,13 @@
+<script context="module" lang="ts">
+	const assistantSegmentPlaybackCache = new Map<
+		string,
+		{
+			visibleContent: string;
+			visibleDone: boolean;
+		}
+	>();
+</script>
+
 <script lang="ts">
 	import { toast } from 'svelte-sonner';
 	import dayjs from 'dayjs';
@@ -143,6 +153,100 @@
 	let finalOutputRevealKey = '';
 	let finalOutputRevealed = false;
 
+	const dedupeByKey = <T>(items: T[], getKey: (item: T) => string) => {
+		const seen = new Set<string>();
+		const merged: T[] = [];
+
+		for (const item of items ?? []) {
+			const key = getKey(item);
+			if (seen.has(key)) {
+				continue;
+			}
+			seen.add(key);
+			merged.push(item);
+		}
+
+		return merged;
+	};
+
+	const getAssistantSegmentMessages = (messagesMap, currentMessageId) => {
+		const segment = [];
+		let currentMessage = messagesMap?.[currentMessageId];
+
+		while (currentMessage?.role === 'assistant') {
+			segment.unshift(currentMessage);
+			const parentMessage = currentMessage.parentId ? messagesMap?.[currentMessage.parentId] : null;
+			if (parentMessage?.role !== 'assistant') {
+				break;
+			}
+			currentMessage = parentMessage;
+		}
+
+		return segment;
+	};
+
+	const buildAssistantSegmentMessage = (messagesMap, currentMessageId) => {
+		const segmentMessages = getAssistantSegmentMessages(messagesMap, currentMessageId);
+		const latestMessage = segmentMessages.at(-1) ?? messagesMap?.[currentMessageId];
+
+		if (!latestMessage) {
+			return {
+				message: null,
+				segmentIds: []
+			};
+		}
+
+		if (segmentMessages.length <= 1) {
+			return {
+				message: structuredClone(latestMessage),
+				segmentIds: [latestMessage.id]
+			};
+		}
+
+		const mergedContent = segmentMessages
+			.map((item) => item?.content ?? '')
+			.filter((content) => content !== '')
+			.join('\n\n');
+
+		const mergedStatusHistory = dedupeByKey(
+			segmentMessages.flatMap((item) => item?.statusHistory ?? []),
+			(item) => JSON.stringify(item)
+		);
+		const mergedFiles = dedupeByKey(
+			segmentMessages.flatMap((item) => item?.files ?? []),
+			(item) => JSON.stringify(item)
+		);
+		const mergedSources = dedupeByKey(
+			segmentMessages.flatMap((item) => item?.sources ?? item?.citations ?? []),
+			(item) => JSON.stringify(item)
+		);
+		const mergedCodeExecutions = dedupeByKey(
+			segmentMessages.flatMap((item) => item?.code_executions ?? []),
+			(item) => item?.id ?? item?.uuid ?? JSON.stringify(item)
+		);
+
+		return {
+			message: structuredClone({
+				...latestMessage,
+				content: mergedContent,
+				statusHistory: mergedStatusHistory.length > 0 ? mergedStatusHistory : latestMessage.statusHistory,
+				files: mergedFiles.length > 0 ? mergedFiles : latestMessage.files,
+				sources: mergedSources.length > 0 ? mergedSources : latestMessage.sources,
+				citations: mergedSources.length > 0 ? mergedSources : latestMessage.citations,
+				code_executions:
+					mergedCodeExecutions.length > 0
+						? mergedCodeExecutions
+						: latestMessage.code_executions,
+				timestamp: segmentMessages[0]?.timestamp ?? latestMessage.timestamp,
+				error:
+					segmentMessages.find((item) => item?.error)?.error ?? latestMessage.error
+			}),
+			segmentIds: segmentMessages.map((item) => item.id)
+		};
+	};
+
+	let assistantSegmentCacheKey: string = messageId;
+
 	const extractReasoningMetadata = (content: string) => {
 		if (typeof content !== 'string' || !content.includes('type="reasoning"')) {
 			return null;
@@ -181,6 +285,11 @@
 	const getThinkingLabel = () => {
 		const lang = ($i18n?.language ?? '').toLowerCase();
 		return lang.startsWith('en') ? 'Thinking' : '正在思考';
+	};
+
+	const getRespondingLabel = () => {
+		const lang = ($i18n?.language ?? '').toLowerCase();
+		return lang.startsWith('en') ? 'Drafting response' : '正在输出回复';
 	};
 
 	const formatThoughtSummary = (durationInSeconds: number | null) => {
@@ -443,6 +552,13 @@
 		nextMessage.content = isSmoothStreamingEnabled() ? visibleContent : targetContent;
 		nextMessage.done = isSmoothStreamingEnabled() ? visibleDone : targetDone;
 		message = nextMessage;
+
+		if (assistantSegmentCacheKey) {
+			assistantSegmentPlaybackCache.set(assistantSegmentCacheKey, {
+				visibleContent: nextMessage.content ?? '',
+				visibleDone: nextMessage.done ?? false
+			});
+		}
 	};
 
 	$: renderedContent =
@@ -522,21 +638,24 @@
 		[...parsedToolCallDetails].reverse().find((item) => item?.attributes?.done !== 'true') ?? null;
 	$: hasWorkflowDetails =
 		visibleStatusHistory.length > 0 || parsedToolCallDetails.length > 0;
-	$: unifiedIndicatorText = hasAssistantResponseStarted
-		? fallbackThoughtSummary
-		: latestStatusItem
-			? getStatusIndicatorText(latestStatusItem)
-			: pendingToolCallDetail
-				? getToolCallIndicatorText(pendingToolCallDetail)
-				: pendingStatusItem
-					? getStatusIndicatorText(pendingStatusItem)
+	$: activeWorkflowIndicatorText = pendingToolCallDetail
+		? getToolCallIndicatorText(pendingToolCallDetail)
+		: pendingStatusItem
+			? getStatusIndicatorText(pendingStatusItem)
+			: latestStatusItem?.done !== true
+				? getStatusIndicatorText(latestStatusItem)
+				: null;
+	$: unifiedIndicatorText = activeWorkflowIndicatorText
+		? activeWorkflowIndicatorText
+		: !isActuallyDone
+			? hasAssistantResponseStarted
+				? getRespondingLabel()
+				: fallbackThoughtSummary
+			: latestStatusItem
+				? getStatusIndicatorText(latestStatusItem)
 				: fallbackThoughtSummary;
 	$: shouldAnimateUnifiedIndicator =
-		!hasAssistantResponseStarted &&
-		(!effectiveReasoningDone ||
-			latestStatusItem?.done !== true ||
-			pendingStatusItem !== null ||
-			pendingToolCallDetail !== null);
+		shouldShowUnifiedIndicator && (!finalOutputContentReady || isAwaitingGlobalCompletion);
 	let indicatorWasEverAnimated = false;
 	let indicatorFrozeAtSeconds: number | null = null;
 	$: {
@@ -729,8 +848,9 @@
 		}
 	};
 
-	const applySourceMessage = (source: MessageType) => {
+	const applySourceMessage = (source: MessageType, segmentIds: string[] = [source?.id]) => {
 		latestSourceMessage = structuredClone(source);
+		assistantSegmentCacheKey = segmentIds[0] ?? source.id;
 
 		const nextTargetContent = source.content ?? '';
 		const nextTargetDone =
@@ -740,6 +860,23 @@
 		if (nextTargetContent !== targetContent) {
 			targetContent = nextTargetContent;
 			targetContentUnits = Array.from(targetContent);
+
+			const cachedPlayback = assistantSegmentPlaybackCache.get(assistantSegmentCacheKey);
+			if (
+				smoothStreamingEnabled &&
+				cachedPlayback?.visibleContent &&
+				targetContent.startsWith(cachedPlayback.visibleContent)
+			) {
+				visibleContent = cachedPlayback.visibleContent;
+				visibleUnitsCount = Array.from(cachedPlayback.visibleContent).length;
+				visibleDone =
+					nextTargetDone && cachedPlayback.visibleContent === targetContent
+						? cachedPlayback.visibleDone
+						: false;
+				playbackCarry = 0;
+				lastPlaybackAt = 0;
+				playbackBufferStartedAt = 0;
+			}
 
 			if (!smoothStreamingEnabled) {
 				visibleUnitsCount = targetContentUnits.length;
@@ -778,9 +915,9 @@
 	};
 
 	$: if (history.messages) {
-		const source = history.messages[messageId];
-		if (source) {
-			applySourceMessage(source);
+		const composite = buildAssistantSegmentMessage(history.messages, messageId);
+		if (composite.message) {
+			applySourceMessage(composite.message, composite.segmentIds);
 		}
 	}
 
@@ -1362,32 +1499,6 @@
 							class="w-full flex flex-col relative {edit ? 'hidden' : ''}"
 							id="response-content-container"
 						>
-							{#if shouldShowUnifiedIndicator}
-								<div class="mb-1">
-									<WorkflowIndicator
-											text={unifiedIndicatorText}
-											startedAt={fallbackThinkingStartedAt}
-											cacheKey={message.id}
-											expandable={hasWorkflowDetails}
-											animated={shouldAnimateUnifiedIndicator}
-											showElapsed={!hasAssistantResponseStarted}
-											frozenElapsedSeconds={shouldAnimateUnifiedIndicator
-												? null
-												: fallbackDisplayedDurationSeconds}
-										bind:open={workflowExpanded}
-									>
-											<div class="space-y-3">
-												{#if model?.info?.meta?.capabilities?.status_updates ?? true}
-													<StatusHistory
-														statusHistory={message?.statusHistory}
-														toolCallDetails={parsedToolCallDetails}
-													/>
-												{/if}
-											</div>
-										</WorkflowIndicator>
-									</div>
-							{/if}
-
 							{#if message.content && message.error !== true}
 								<!-- always show message contents even if there's an error -->
 								<!-- unless message.error === true which is legacy error handling, where the error message is stored in message.content -->
@@ -1473,6 +1584,32 @@
 												{/if}
 											</div>
 										{/each}
+									</div>
+								{/if}
+
+								{#if shouldShowUnifiedIndicator}
+									<div class="mt-3">
+										<WorkflowIndicator
+											text={unifiedIndicatorText}
+											startedAt={fallbackThinkingStartedAt}
+											cacheKey={assistantSegmentCacheKey}
+											expandable={hasWorkflowDetails}
+											animated={shouldAnimateUnifiedIndicator}
+											showElapsed={!hasAssistantResponseStarted}
+											frozenElapsedSeconds={shouldAnimateUnifiedIndicator
+												? null
+												: fallbackDisplayedDurationSeconds}
+											bind:open={workflowExpanded}
+										>
+											<div class="space-y-3">
+												{#if model?.info?.meta?.capabilities?.status_updates ?? true}
+													<StatusHistory
+														statusHistory={message?.statusHistory}
+														toolCallDetails={parsedToolCallDetails}
+													/>
+												{/if}
+											</div>
+										</WorkflowIndicator>
 									</div>
 								{/if}
 							</div>

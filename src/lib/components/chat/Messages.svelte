@@ -79,6 +79,39 @@
 	let pendingRebuild = null;
 	let lastCurrentId = null;
 
+	const collapseAssistantRuns = (messageList) => {
+		return messageList.filter((message, index, list) => {
+			if (message?.role !== 'assistant') {
+				return true;
+			}
+
+			const nextMessage = list[index + 1];
+			return nextMessage?.role !== 'assistant';
+		});
+	};
+
+	const getAssistantSegmentRootId = (message) => {
+		if (!message?.id || message?.role !== 'assistant') {
+			return message?.id;
+		}
+
+		let currentMessage = message;
+		while (currentMessage?.role === 'assistant') {
+			const parentMessage = currentMessage.parentId
+				? history.messages[currentMessage.parentId]
+				: null;
+			if (parentMessage?.role !== 'assistant') {
+				break;
+			}
+			currentMessage = parentMessage;
+		}
+
+		return currentMessage?.id ?? message.id;
+	};
+
+	const getMessageRenderKey = (message) =>
+		message?.role === 'assistant' ? getAssistantSegmentRootId(message) : message?.id;
+
 	const buildMessages = () => {
 		let _messages = [];
 
@@ -96,7 +129,7 @@
 			message = message.parentId !== null ? history.messages[message.parentId] : null;
 		}
 
-		messages = _messages.reverse();
+		messages = collapseAssistantRuns(_messages.reverse());
 	};
 
 	// Throttle message list rebuilds to once per animation frame during streaming.
@@ -467,7 +500,7 @@
 						</Loader>
 					{/if}
 					<ul role="log" aria-live="polite" aria-relevant="additions" aria-atomic="false">
-						{#each messages as message, messageIdx (message.id)}
+						{#each messages as message, messageIdx (getMessageRenderKey(message))}
 							<Message
 								{chatId}
 								bind:history

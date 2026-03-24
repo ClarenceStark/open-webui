@@ -832,21 +832,36 @@
 						generating = false;
 					generationController = null;
 
-					const currentMessage = history.messages[event.message_id];
-					if (currentMessage?.role === 'assistant' && currentMessage.done !== true) {
+					const focusMessageId = getDeepestVisibleMessageId(history, event.message_id);
+					const currentMessage = history.messages[focusMessageId];
+					if (
+						focusMessageId !== event.message_id ||
+						(currentMessage?.role === 'assistant' && currentMessage.done !== true)
+					) {
 						const synced = await syncChatFromServer(event.chat_id, {
-							focusMessageId: event.message_id,
+							focusMessageId,
 							emitFinish: true
 						});
 
-						if (!synced && history.messages[event.message_id]) {
-							history.messages[event.message_id].done = true;
+						if (!synced && history.messages[focusMessageId]) {
+							history.messages[focusMessageId].done = true;
 						}
 					}
 
 					await processQueuedMessagesIfIdle();
 				}
 
+				return;
+			}
+
+			if (type === 'chat:message:create') {
+				const createdMessage = insertHistoryMessageNode(data?.message);
+				if (createdMessage) {
+					await tick();
+					if (autoScroll) {
+						scheduleScrollToBottom();
+					}
+				}
 				return;
 			}
 
@@ -873,6 +888,11 @@
 					message.content += data.content;
 				} else if (type === 'chat:message' || type === 'replace') {
 					message.content = data.content;
+				} else if (type === 'chat:message:update') {
+					message = normalizeArtifactMessage({
+						...message,
+						...(data?.message ?? {})
+					});
 				} else if (type === 'chat:message:files' || type === 'files') {
 					const nextFiles = data.files ?? [];
 					const existingFiles = message.files ?? [];
@@ -1782,6 +1802,48 @@
 		return merged;
 	};
 
+	const insertHistoryMessageNode = (incomingMessage) => {
+		if (!incomingMessage?.id) {
+			return null;
+		}
+
+		const existingMessage = history.messages[incomingMessage.id];
+		const mergedMessage = normalizeArtifactMessage({
+			...(existingMessage ?? {}),
+			...incomingMessage,
+			childrenIds: mergeUniqueList(existingMessage?.childrenIds, incomingMessage.childrenIds ?? [])
+		});
+
+		history.messages[incomingMessage.id] = mergedMessage;
+
+		const parentId = mergedMessage.parentId;
+		if (parentId && history.messages[parentId]) {
+			history.messages[parentId] = {
+				...history.messages[parentId],
+				childrenIds: mergeUniqueList(history.messages[parentId].childrenIds, [incomingMessage.id])
+			};
+		}
+
+		history.currentId = incomingMessage.id;
+		return mergedMessage;
+	};
+
+	const getDeepestVisibleMessageId = (_history, initialMessageId) => {
+		if (!initialMessageId || !_history?.messages?.[initialMessageId]) {
+			return initialMessageId;
+		}
+
+		let nextMessageId = initialMessageId;
+		let childIds = _history.messages[nextMessageId]?.childrenIds ?? [];
+
+		while (childIds.length > 0) {
+			nextMessageId = childIds.at(-1);
+			childIds = _history.messages[nextMessageId]?.childrenIds ?? [];
+		}
+
+		return nextMessageId;
+	};
+
 	const assistantMessageCompletenessScore = (message) => {
 		if (!message || message.role !== 'assistant') {
 			return 0;
@@ -2022,7 +2084,7 @@
 
 		history = nextHistory;
 		if (focusMessageId && history.messages[focusMessageId]) {
-			history.currentId = focusMessageId;
+			history.currentId = getDeepestVisibleMessageId(history, focusMessageId);
 		}
 
 		chat = latestChat;

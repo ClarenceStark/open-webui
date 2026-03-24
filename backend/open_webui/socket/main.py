@@ -780,7 +780,7 @@ def get_event_emitter(request_info, update_db=True):
     async def __event_emitter__(event_data):
         user_id = request_info["user_id"]
         chat_id = request_info["chat_id"]
-        message_id = request_info["message_id"]
+        message_id = event_data.get("message_id") or request_info["message_id"]
 
         await sio.emit(
             "events",
@@ -799,42 +799,63 @@ def get_event_emitter(request_info, update_db=True):
         ):
 
             event_type = event_data.get("type")
+            event_payload = event_data.get("data", {})
 
             if event_type == "status":
                 await asyncio.to_thread(
                     Chats.add_message_status_to_chat_by_id_and_message_id,
                     request_info["chat_id"],
-                    request_info["message_id"],
-                    event_data.get("data", {}),
+                    message_id,
+                    event_payload,
                 )
+
+            elif event_type == "chat:message:create":
+                message = event_payload.get("message", {})
+                if message:
+                    await asyncio.to_thread(
+                        Chats.insert_message_to_chat_by_id_and_message_id,
+                        request_info["chat_id"],
+                        message_id,
+                        message,
+                    )
+
+            elif event_type == "chat:message:update":
+                message = event_payload.get("message", {})
+                if message:
+                    await asyncio.to_thread(
+                        Chats.upsert_message_to_chat_by_id_and_message_id,
+                        request_info["chat_id"],
+                        message_id,
+                        message,
+                    )
 
             elif event_type == "message":
                 message = await asyncio.to_thread(
                     Chats.get_message_by_id_and_message_id,
                     request_info["chat_id"],
-                    request_info["message_id"],
+                    message_id,
                 )
 
                 if message:
                     content = message.get("content", "")
-                    content += event_data.get("data", {}).get("content", "")
+                    content += event_payload.get("content", "")
 
                     await asyncio.to_thread(
                         Chats.upsert_message_to_chat_by_id_and_message_id,
                         request_info["chat_id"],
-                        request_info["message_id"],
+                        message_id,
                         {
                             "content": content,
                         },
                     )
 
             elif event_type == "replace":
-                content = event_data.get("data", {}).get("content", "")
+                content = event_payload.get("content", "")
 
                 await asyncio.to_thread(
                     Chats.upsert_message_to_chat_by_id_and_message_id,
                     request_info["chat_id"],
-                    request_info["message_id"],
+                    message_id,
                     {
                         "content": content,
                     },
@@ -844,16 +865,16 @@ def get_event_emitter(request_info, update_db=True):
                 message = await asyncio.to_thread(
                     Chats.get_message_by_id_and_message_id,
                     request_info["chat_id"],
-                    request_info["message_id"],
+                    message_id,
                 )
 
-                embeds = event_data.get("data", {}).get("embeds", [])
+                embeds = event_payload.get("embeds", [])
                 embeds.extend(message.get("embeds", []))
 
                 await asyncio.to_thread(
                     Chats.upsert_message_to_chat_by_id_and_message_id,
                     request_info["chat_id"],
-                    request_info["message_id"],
+                    message_id,
                     {
                         "embeds": embeds,
                     },
@@ -863,28 +884,28 @@ def get_event_emitter(request_info, update_db=True):
                 message = await asyncio.to_thread(
                     Chats.get_message_by_id_and_message_id,
                     request_info["chat_id"],
-                    request_info["message_id"],
+                    message_id,
                 )
 
-                files = event_data.get("data", {}).get("files", [])
+                files = event_payload.get("files", [])
                 files.extend(message.get("files", []))
 
                 await asyncio.to_thread(
                     Chats.upsert_message_to_chat_by_id_and_message_id,
                     request_info["chat_id"],
-                    request_info["message_id"],
+                    message_id,
                     {
                         "files": files,
                     },
                 )
 
             elif event_type in ("source", "citation"):
-                data = event_data.get("data", {})
+                data = event_payload
                 if data.get("type") is None:
                     message = await asyncio.to_thread(
                         Chats.get_message_by_id_and_message_id,
                         request_info["chat_id"],
-                        request_info["message_id"],
+                        message_id,
                     )
 
                     sources = message.get("sources", [])
@@ -893,7 +914,7 @@ def get_event_emitter(request_info, update_db=True):
                     await asyncio.to_thread(
                         Chats.upsert_message_to_chat_by_id_and_message_id,
                         request_info["chat_id"],
-                        request_info["message_id"],
+                        message_id,
                         {
                             "sources": sources,
                         },
