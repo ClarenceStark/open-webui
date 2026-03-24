@@ -10,21 +10,17 @@ from typing import Any, Awaitable, Callable
 
 from codex_app_server import AsyncCodex, AsyncThread, AsyncTurnHandle
 from codex_app_server.client import AppServerConfig
-from codex_app_server.generated.v2_all import AskForApproval, SandboxMode
 
 from open_webui.codex.config import (
     CODEX_BIN_PATH,
-    CODEX_MODEL,
-    CODEX_MODEL_PROVIDER,
     CODEX_SESSION_IDLE_TIMEOUT,
-    get_thread_config,
+    get_codex_app_server_env,
     get_workspace_path,
 )
 
 log = logging.getLogger(__name__)
 
 _DEFAULT_INPUT_TIMEOUT_SECONDS = 60 * 60
-_APPROVAL_NEVER = AskForApproval("never")
 
 
 def _format_question_message(question: dict[str, Any]) -> str:
@@ -105,6 +101,7 @@ class CodexInteractionBridge:
     def clear(self) -> None:
         with self._lock:
             self._event_caller = None
+            self._loop = None
 
     def handle_request(
         self,
@@ -112,26 +109,97 @@ class CodexInteractionBridge:
         params: dict[str, Any] | None,
     ) -> dict[str, Any]:
         if method == "item/commandExecution/requestApproval":
-            return {"decision": "accept"}
+            return self._handle_command_approval(params or {})
 
         if method == "item/fileChange/requestApproval":
-            return {"decision": "accept"}
+            return self._handle_file_change_approval(params or {})
 
         if method == "item/tool/requestUserInput":
             return self._handle_request_user_input(params or {})
 
         return {}
 
-    def _handle_request_user_input(self, params: dict[str, Any]) -> dict[str, Any]:
+    def _call_event(
+        self,
+        prompt: dict[str, Any],
+        *,
+        timeout: int = _DEFAULT_INPUT_TIMEOUT_SECONDS,
+    ) -> Any:
         with self._lock:
             event_caller = self._event_caller
             loop = self._loop
 
+        if event_caller is None or loop is None:
+            return None
+
+        future = asyncio.run_coroutine_threadsafe(event_caller(prompt), loop)
+        try:
+            return future.result(timeout=timeout)
+        except FutureTimeoutError:
+            log.warning("Timed out waiting for Codex interaction response")
+            return None
+        except Exception:
+            log.exception("Failed to collect Codex interaction response from websocket")
+            return None
+
+    def _has_active_event_caller(self) -> bool:
+        with self._lock:
+            return self._event_caller is not None and self._loop is not None
+
+    def _handle_command_approval(self, params: dict[str, Any]) -> dict[str, Any]:
+        command = str(params.get("command") or "").strip()
+        reason = str(params.get("reason") or "").strip()
+        cwd = str(params.get("cwd") or "").strip()
+
+        details: list[str] = []
+        if reason:
+            details.append(f"原因：{reason}")
+        if cwd:
+            details.append(f"目录：`{cwd}`")
+        if command:
+            details.append("命令：")
+            details.append(f"```sh\n{command}\n```")
+
+        response = self._call_event(
+            {
+                "type": "confirmation",
+                "data": {
+                    "title": "Codex 请求执行命令",
+                    "message": "\n\n".join(details)
+                    or "Codex 请求执行一个需要审批的命令。",
+                },
+            }
+        )
+        return {"decision": "accept" if response else "decline"}
+
+    def _handle_file_change_approval(self, params: dict[str, Any]) -> dict[str, Any]:
+        reason = str(params.get("reason") or "").strip()
+        grant_root = str(params.get("grant_root") or "").strip()
+
+        details: list[str] = []
+        if reason:
+            details.append(f"原因：{reason}")
+        if grant_root:
+            details.append(f"目标路径：`{grant_root}`")
+
+        response = self._call_event(
+            {
+                "type": "confirmation",
+                "data": {
+                    "title": "Codex 请求修改文件",
+                    "message": "\n\n".join(details)
+                    or "Codex 请求执行一个需要审批的文件修改。",
+                },
+            }
+        )
+        return {"decision": "accept" if response else "decline"}
+
+    def _handle_request_user_input(self, params: dict[str, Any]) -> dict[str, Any]:
         questions = params.get("questions") or []
         if not isinstance(questions, list):
             questions = []
 
-        if event_caller is None or loop is None:
+        if not self._has_active_event_caller():
             log.warning("Codex request_user_input received without an active websocket caller")
             return {
                 "answers": {
@@ -160,15 +228,7 @@ class CodexInteractionBridge:
                     "type": "password" if question.get("isSecret") else "text",
                 },
             }
-            future = asyncio.run_coroutine_threadsafe(event_caller(prompt), loop)
-            try:
-                response = future.result(timeout=_DEFAULT_INPUT_TIMEOUT_SECONDS)
-            except FutureTimeoutError:
-                log.warning("Timed out waiting for request_user_input answer")
-                response = None
-            except Exception:
-                log.exception("Failed to collect request_user_input answer from websocket")
-                response = None
+            response = self._call_event(prompt)
 
             answers[question_id] = {
                 "answers": _normalize_answer(question, response),
@@ -216,6 +276,7 @@ class CodexSessionManager:
                 config=AppServerConfig(
                     codex_bin=CODEX_BIN_PATH,
                     cwd=str(workspace),
+                    env=get_codex_app_server_env(),
                 )
             )
             codex._client._sync._approval_handler = bridge.handle_request
@@ -269,17 +330,13 @@ class CodexSessionManager:
             config=AppServerConfig(
                 codex_bin=CODEX_BIN_PATH,
                 cwd=str(session.workspace),
+                env=get_codex_app_server_env(),
             )
         )
         try:
             await controller.thread_resume(
                 session.thread_id,
-                approval_policy=_APPROVAL_NEVER,
-                sandbox=SandboxMode.workspace_write,
                 cwd=str(session.workspace),
-                config=get_thread_config(),
-                model=CODEX_MODEL,
-                model_provider=CODEX_MODEL_PROVIDER,
             )
             await controller._client.turn_interrupt(
                 session.thread_id,
@@ -320,12 +377,7 @@ class CodexSessionManager:
         workspace: Path,
     ) -> AsyncThread:
         kwargs = {
-            "approval_policy": _APPROVAL_NEVER,
-            "sandbox": SandboxMode.workspace_write,
             "cwd": str(workspace),
-            "config": get_thread_config(),
-            "model": CODEX_MODEL,
-            "model_provider": CODEX_MODEL_PROVIDER,
         }
 
         if codex_thread_id:

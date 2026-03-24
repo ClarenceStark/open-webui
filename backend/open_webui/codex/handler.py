@@ -6,7 +6,6 @@ from typing import Any
 from codex_app_server import TextInput
 from codex_app_server.generated.v2_all import (
     AgentMessageThreadItem,
-    AskForApproval,
     CommandExecutionThreadItem,
     ErrorNotification,
     FileChangeThreadItem,
@@ -14,7 +13,6 @@ from codex_app_server.generated.v2_all import (
     ItemStartedNotification,
     PlanThreadItem,
     PlanDeltaNotification,
-    SandboxPolicy,
     ThreadItem,
     ThreadTokenUsageUpdatedNotification,
     TurnCompletedNotification,
@@ -23,12 +21,11 @@ from codex_app_server.generated.v2_all import (
 from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse
 
-from open_webui.codex.config import get_model_override, get_sandbox_policy
+from open_webui.codex.config import get_model_override
 from open_webui.models.chats import Chats
 from open_webui.socket.main import get_event_call, get_event_emitter
 
 log = logging.getLogger(__name__)
-_APPROVAL_NEVER = AskForApproval("never")
 
 
 def _unwrap_item(item: ThreadItem | Any) -> Any:
@@ -284,9 +281,7 @@ async def codex_chat_completion(
         try:
             turn_handle = await session.thread.turn(
                 TextInput(user_message),
-                approval_policy=_APPROVAL_NEVER,
                 model=get_model_override(form_data.get("model")),
-                sandbox_policy=SandboxPolicy.model_validate(get_sandbox_policy()),
             )
             session.current_turn = turn_handle
             session.current_turn_id = turn_handle.id
