@@ -189,7 +189,11 @@
 		return segment;
 	};
 
-	const buildAssistantSegmentMessage = (messagesMap, currentMessageId) => {
+	const buildAssistantSegmentMessage = (
+		messagesMap,
+		currentMessageId,
+		allowWorkflowCollapse = true
+	) => {
 		const segmentMessages = getAssistantSegmentMessages(messagesMap, currentMessageId);
 		const latestMessage = segmentMessages.at(-1) ?? messagesMap?.[currentMessageId];
 
@@ -215,11 +219,21 @@
 
 		const segmentRootId = segmentMessages[0]?.id ?? latestMessage.id;
 		const workflowMessages = segmentMessages.slice(0, -1);
-		const shouldCollapseWorkflow = (latestMessage.done ?? false) && workflowMessages.length > 0;
+		const shouldCollapseWorkflow =
+			allowWorkflowCollapse && (latestMessage.done ?? false) && workflowMessages.length > 0;
+		const mergedStatusHistory = dedupeByKey(
+			segmentMessages.flatMap((item) => item?.statusHistory ?? []),
+			(item) => JSON.stringify(item)
+		);
 
 		if (shouldCollapseWorkflow) {
 			return {
-				message: structuredClone(latestMessage),
+				message: structuredClone({
+					...latestMessage,
+					statusHistory:
+						mergedStatusHistory.length > 0 ? mergedStatusHistory : latestMessage.statusHistory,
+					timestamp: segmentMessages[0]?.timestamp ?? latestMessage.timestamp
+				}),
 				segmentIds: [segmentRootId],
 				workflowMessages: structuredClone(workflowMessages),
 				shouldCollapseWorkflow: true,
@@ -232,10 +246,6 @@
 			.filter((content) => content !== '')
 			.join('\n\n');
 
-		const mergedStatusHistory = dedupeByKey(
-			segmentMessages.flatMap((item) => item?.statusHistory ?? []),
-			(item) => JSON.stringify(item)
-		);
 		const mergedFiles = dedupeByKey(
 			segmentMessages.flatMap((item) => item?.files ?? []),
 			(item) => JSON.stringify(item)
@@ -677,15 +687,56 @@
 		typeof targetContent === 'string' ? extractToolCallDetails(targetContent) : [];
 	$: latestStatusItem = visibleStatusHistory.at(-1) ?? null;
 	$: latestCompletedCodexStatus =
-		[...visibleStatusHistory].reverse().find(
-			(item) => item?.action === 'codex' && item?.done === true
-		) ?? null;
-	$: persistedCodexDurationSeconds =
-		typeof latestCompletedCodexStatus?.duration === 'number' &&
-		Number.isFinite(latestCompletedCodexStatus.duration) &&
-		latestCompletedCodexStatus.duration >= 0
-			? Math.floor(latestCompletedCodexStatus.duration)
-			: null;
+		[...visibleStatusHistory]
+			.reverse()
+			.find((item) => item?.action === 'codex' && item?.done === true) ?? null;
+	$: persistedCodexDurationSeconds = (() => {
+		const codexStatuses = visibleStatusHistory.filter((item) => item?.action === 'codex');
+		if (codexStatuses.length === 0) {
+			return null;
+		}
+
+		const startedAtCandidates = codexStatuses
+			.map((item) => normalizeStartedAtSeconds(item?.started_at ?? null))
+			.filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+		const earliestStartedAt =
+			startedAtCandidates.length > 0 ? Math.min(...startedAtCandidates) : null;
+
+		const endedAtCandidates = codexStatuses
+			.filter((item) => item?.done === true)
+			.map((item) => {
+				const endedAt = normalizeStartedAtSeconds(item?.ended_at ?? null);
+				if (endedAt !== null) {
+					return endedAt;
+				}
+
+				const startedAt = normalizeStartedAtSeconds(item?.started_at ?? null);
+				const duration =
+					typeof item?.duration === 'number' &&
+					Number.isFinite(item.duration) &&
+					item.duration >= 0
+						? Math.floor(item.duration)
+						: null;
+
+				return startedAt !== null && duration !== null ? startedAt + duration : null;
+			})
+			.filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+		const latestEndedAt = endedAtCandidates.length > 0 ? Math.max(...endedAtCandidates) : null;
+
+		if (earliestStartedAt !== null && latestEndedAt !== null) {
+			return Math.max(0, latestEndedAt - earliestStartedAt);
+		}
+
+		if (
+			typeof latestCompletedCodexStatus?.duration === 'number' &&
+			Number.isFinite(latestCompletedCodexStatus.duration) &&
+			latestCompletedCodexStatus.duration >= 0
+		) {
+			return Math.floor(latestCompletedCodexStatus.duration);
+		}
+
+		return null;
+	})();
 	$: pendingStatusItem =
 		[...visibleStatusHistory].reverse().find((item) => item?.done !== true) ?? null;
 	$: hasCodexWorkflow = visibleStatusHistory.some((item) => item?.action === 'codex');
@@ -732,9 +783,7 @@
 		return Math.max(0, indicatorFrozeAtSeconds - startedAtSeconds);
 	})();
 	$: workflowIndicatorFrozenElapsedSeconds = hasCodexWorkflow
-		? pseudoDoneDurationSeconds ??
-			persistedCodexDurationSeconds ??
-			frozenElapsedAtIndicatorFreeze
+		? (persistedCodexDurationSeconds ?? pseudoDoneDurationSeconds ?? frozenElapsedAtIndicatorFreeze)
 		: fallbackDisplayedDurationSeconds;
 	$: workflowIndicatorShowElapsed = hasCodexWorkflow
 		? shouldAnimateUnifiedIndicator || workflowIndicatorFrozenElapsedSeconds !== null
@@ -982,7 +1031,19 @@
 	};
 
 	$: if (history.messages) {
-		const composite = buildAssistantSegmentMessage(history.messages, messageId);
+		const allowWorkflowCollapse =
+			!isLastMessage ||
+			(!message?.error &&
+				finalOutputContentReady &&
+				finalOutputRevealed &&
+				!shouldAnimateUnifiedIndicator &&
+				!isAwaitingGlobalCompletion &&
+				isActuallyDone);
+		const composite = buildAssistantSegmentMessage(
+			history.messages,
+			messageId,
+			allowWorkflowCollapse
+		);
 		if (composite.message) {
 			workflowMessages = composite.workflowMessages ?? [];
 			shouldCollapseWorkflowProcess = composite.shouldCollapseWorkflow ?? false;
