@@ -70,6 +70,7 @@
 	import { flyAndScale } from '$lib/utils/transitions';
 	import RegenerateMenu from './ResponseMessage/RegenerateMenu.svelte';
 	import StatusHistory from './ResponseMessage/StatusHistory.svelte';
+	import WorkflowProcessCard from './ResponseMessage/WorkflowProcessCard.svelte';
 	import FullHeightIframe from '$lib/components/common/FullHeightIframe.svelte';
 	import {
 		getLocalizedToolActionLabel,
@@ -90,6 +91,9 @@
 			description: string;
 			urls?: string[];
 			query?: string;
+			started_at?: number | string;
+			ended_at?: number | string;
+			duration?: number;
 		}[];
 		status?: {
 			done: boolean;
@@ -153,7 +157,7 @@
 	let finalOutputRevealKey = '';
 	let finalOutputRevealed = false;
 
-	const dedupeByKey = <T>(items: T[], getKey: (item: T) => string) => {
+	const dedupeByKey = <T,>(items: T[], getKey: (item: T) => string) => {
 		const seen = new Set<string>();
 		const merged: T[] = [];
 
@@ -192,14 +196,34 @@
 		if (!latestMessage) {
 			return {
 				message: null,
-				segmentIds: []
+				segmentIds: [],
+				workflowMessages: [],
+				shouldCollapseWorkflow: false,
+				segmentRootId: currentMessageId ?? null
 			};
 		}
 
 		if (segmentMessages.length <= 1) {
 			return {
 				message: structuredClone(latestMessage),
-				segmentIds: [latestMessage.id]
+				segmentIds: [latestMessage.id],
+				workflowMessages: [],
+				shouldCollapseWorkflow: false,
+				segmentRootId: latestMessage.id
+			};
+		}
+
+		const segmentRootId = segmentMessages[0]?.id ?? latestMessage.id;
+		const workflowMessages = segmentMessages.slice(0, -1);
+		const shouldCollapseWorkflow = (latestMessage.done ?? false) && workflowMessages.length > 0;
+
+		if (shouldCollapseWorkflow) {
+			return {
+				message: structuredClone(latestMessage),
+				segmentIds: [segmentRootId],
+				workflowMessages: structuredClone(workflowMessages),
+				shouldCollapseWorkflow: true,
+				segmentRootId
 			};
 		}
 
@@ -229,23 +253,29 @@
 			message: structuredClone({
 				...latestMessage,
 				content: mergedContent,
-				statusHistory: mergedStatusHistory.length > 0 ? mergedStatusHistory : latestMessage.statusHistory,
+				statusHistory:
+					mergedStatusHistory.length > 0 ? mergedStatusHistory : latestMessage.statusHistory,
 				files: mergedFiles.length > 0 ? mergedFiles : latestMessage.files,
 				sources: mergedSources.length > 0 ? mergedSources : latestMessage.sources,
 				citations: mergedSources.length > 0 ? mergedSources : latestMessage.citations,
 				code_executions:
-					mergedCodeExecutions.length > 0
-						? mergedCodeExecutions
-						: latestMessage.code_executions,
+					mergedCodeExecutions.length > 0 ? mergedCodeExecutions : latestMessage.code_executions,
 				timestamp: segmentMessages[0]?.timestamp ?? latestMessage.timestamp,
-				error:
-					segmentMessages.find((item) => item?.error)?.error ?? latestMessage.error
+				error: segmentMessages.find((item) => item?.error)?.error ?? latestMessage.error
 			}),
-			segmentIds: segmentMessages.map((item) => item.id)
+			segmentIds: segmentMessages.map((item) => item.id),
+			workflowMessages: [],
+			shouldCollapseWorkflow: false,
+			segmentRootId
 		};
 	};
 
 	let assistantSegmentCacheKey: string = messageId;
+	let workflowMessages: MessageType[] = [];
+	let shouldCollapseWorkflowProcess = false;
+	let workflowSegmentRootId: string = messageId;
+	let workflowCardExpanded = false;
+	let workflowCardExpandedKey = '';
 
 	const extractReasoningMetadata = (content: string) => {
 		if (typeof content !== 'string' || !content.includes('type="reasoning"')) {
@@ -292,6 +322,16 @@
 		return lang.startsWith('en') ? 'Drafting response' : '正在输出回复';
 	};
 
+	const getCodexWorkingLabel = () => {
+		const lang = ($i18n?.language ?? '').toLowerCase();
+		return lang.startsWith('en') ? 'Working' : '工作中';
+	};
+
+	const getCodexCompletedLabel = () => {
+		const lang = ($i18n?.language ?? '').toLowerCase();
+		return lang.startsWith('en') ? 'Completed' : '已完成';
+	};
+
 	const formatThoughtSummary = (durationInSeconds: number | null) => {
 		if (durationInSeconds === null || Number.isNaN(durationInSeconds)) {
 			return getThinkingLabel();
@@ -313,8 +353,7 @@
 	};
 
 	const normalizeStartedAtSeconds = (value: number | string | null) => {
-		const numericValue =
-			typeof value === 'string' && value.trim() !== '' ? Number(value) : value;
+		const numericValue = typeof value === 'string' && value.trim() !== '' ? Number(value) : value;
 
 		if (!numericValue || !Number.isFinite(numericValue) || numericValue <= 0) {
 			return null;
@@ -336,7 +375,9 @@
 	const STATUS_HISTORY_HIDDEN_ACTIONS = new Set([
 		'artifact_uploaded',
 		'download_artifact',
-		'view_image'
+		'view_image',
+		'command_output',
+		'file_change'
 	]);
 
 	const TOOL_CALL_DETAILS_REGEX =
@@ -380,6 +421,14 @@
 	const getStatusIndicatorText = (item) => {
 		if (!item) {
 			return '';
+		}
+
+		if (item?.action === 'codex') {
+			const description = trimTrailingEllipsis(item?.description ?? '').trim();
+			if (!description || description.startsWith('Codex:')) {
+				return '正在处理...';
+			}
+			return description;
 		}
 
 		if (item?.description?.includes('{{count}}')) {
@@ -563,13 +612,12 @@
 
 	$: renderedContent =
 		typeof message?.content === 'string'
-			? sanitizeAssistantDisplayContent(
-					message.content,
-					isActuallyDone
-				)
+			? sanitizeAssistantDisplayContent(message.content, isActuallyDone)
 			: message?.content;
 	$: displayedAssistantContent =
-		typeof renderedContent === 'string' ? removeDetails(renderedContent, ['reasoning']) : renderedContent;
+		typeof renderedContent === 'string'
+			? removeDetails(renderedContent, ['reasoning'])
+			: renderedContent;
 	$: targetReasoningMetadata =
 		typeof targetContent === 'string' ? extractReasoningMetadata(targetContent) : null;
 	$: pseudoDoneDurationSeconds =
@@ -593,10 +641,7 @@
 	$: shouldShowFallbackThinking =
 		!hasVisibleReasoningDetails &&
 		(!effectiveReasoningDone || !!targetReasoningMetadata || pseudoDoneDurationSeconds !== null);
-	$: fallbackThinkingStartedAt =
-		targetReasoningMetadata?.startedAt ??
-		message.timestamp ??
-		null;
+	$: fallbackThinkingStartedAt = targetReasoningMetadata?.startedAt ?? message.timestamp ?? null;
 	$: if (firstVisibleAssistantTextAtMessageId !== message.id) {
 		firstVisibleAssistantTextAtMessageId = message.id;
 		firstVisibleAssistantTextAt = null;
@@ -624,20 +669,29 @@
 		pseudoDoneDurationSeconds ??
 		targetReasoningMetadata?.duration ??
 		null;
-	$: fallbackThoughtSummary = formatThoughtSummary(
-		fallbackDisplayedDurationSeconds
-	);
+	$: fallbackThoughtSummary = formatThoughtSummary(fallbackDisplayedDurationSeconds);
 	$: visibleStatusHistory = (message?.statusHistory ?? []).filter(
 		(item) => item && item.hidden !== true && !STATUS_HISTORY_HIDDEN_ACTIONS.has(item.action)
 	);
 	$: parsedToolCallDetails =
 		typeof targetContent === 'string' ? extractToolCallDetails(targetContent) : [];
 	$: latestStatusItem = visibleStatusHistory.at(-1) ?? null;
-	$: pendingStatusItem = [...visibleStatusHistory].reverse().find((item) => item?.done !== true) ?? null;
+	$: latestCompletedCodexStatus =
+		[...visibleStatusHistory].reverse().find(
+			(item) => item?.action === 'codex' && item?.done === true
+		) ?? null;
+	$: persistedCodexDurationSeconds =
+		typeof latestCompletedCodexStatus?.duration === 'number' &&
+		Number.isFinite(latestCompletedCodexStatus.duration) &&
+		latestCompletedCodexStatus.duration >= 0
+			? Math.floor(latestCompletedCodexStatus.duration)
+			: null;
+	$: pendingStatusItem =
+		[...visibleStatusHistory].reverse().find((item) => item?.done !== true) ?? null;
+	$: hasCodexWorkflow = visibleStatusHistory.some((item) => item?.action === 'codex');
 	$: pendingToolCallDetail =
 		[...parsedToolCallDetails].reverse().find((item) => item?.attributes?.done !== 'true') ?? null;
-	$: hasWorkflowDetails =
-		visibleStatusHistory.length > 0 || parsedToolCallDetails.length > 0;
+	$: hasWorkflowDetails = visibleStatusHistory.length > 0 || parsedToolCallDetails.length > 0;
 	$: activeWorkflowIndicatorText = pendingToolCallDetail
 		? getToolCallIndicatorText(pendingToolCallDetail)
 		: pendingStatusItem
@@ -656,6 +710,11 @@
 				: fallbackThoughtSummary;
 	$: shouldAnimateUnifiedIndicator =
 		shouldShowUnifiedIndicator && (!finalOutputContentReady || isAwaitingGlobalCompletion);
+	$: codexIndicatorText = hasCodexWorkflow
+		? shouldAnimateUnifiedIndicator
+			? getCodexWorkingLabel()
+			: getCodexCompletedLabel()
+		: null;
 	let indicatorWasEverAnimated = false;
 	let indicatorFrozeAtSeconds: number | null = null;
 	$: {
@@ -672,6 +731,15 @@
 		if (startedAtSeconds === null) return null;
 		return Math.max(0, indicatorFrozeAtSeconds - startedAtSeconds);
 	})();
+	$: workflowIndicatorFrozenElapsedSeconds = hasCodexWorkflow
+		? pseudoDoneDurationSeconds ??
+			persistedCodexDurationSeconds ??
+			frozenElapsedAtIndicatorFreeze
+		: fallbackDisplayedDurationSeconds;
+	$: workflowIndicatorShowElapsed = hasCodexWorkflow
+		? shouldAnimateUnifiedIndicator || workflowIndicatorFrozenElapsedSeconds !== null
+		: !hasAssistantResponseStarted;
+	$: workflowIndicatorText = codexIndicatorText ?? unifiedIndicatorText;
 	$: shouldShowUnifiedIndicator =
 		!message.error &&
 		(hasWorkflowDetails || shouldShowFallbackThinking || targetReasoningMetadata !== null);
@@ -692,8 +760,7 @@
 			? history.messages[history.currentId]?.done === true
 			: true;
 	$: isAwaitingGlobalCompletion =
-		isLastMessage &&
-		(generating || ((taskIds ?? []).length > 0) || !currentHistoryMessageDone);
+		isLastMessage && (generating || (taskIds ?? []).length > 0 || !currentHistoryMessageDone);
 	$: shouldDelayFinalOutputReveal = isLastMessage;
 	$: finalOutputPresentationReady =
 		hasAssistantResponseStarted ||
@@ -917,7 +984,18 @@
 	$: if (history.messages) {
 		const composite = buildAssistantSegmentMessage(history.messages, messageId);
 		if (composite.message) {
+			workflowMessages = composite.workflowMessages ?? [];
+			shouldCollapseWorkflowProcess = composite.shouldCollapseWorkflow ?? false;
+			workflowSegmentRootId = composite.segmentRootId ?? messageId;
 			applySourceMessage(composite.message, composite.segmentIds);
+		}
+	}
+
+	$: {
+		const nextExpandedKey = shouldCollapseWorkflowProcess ? workflowSegmentRootId : '';
+		if (nextExpandedKey !== workflowCardExpandedKey) {
+			workflowCardExpandedKey = nextExpandedKey;
+			workflowCardExpanded = false;
 		}
 	}
 
@@ -1499,14 +1577,28 @@
 							class="w-full flex flex-col relative {edit ? 'hidden' : ''}"
 							id="response-content-container"
 						>
+							{#if shouldCollapseWorkflowProcess && workflowMessages.length > 0}
+								<div class="mb-3">
+									<WorkflowProcessCard
+										{chatId}
+										{history}
+										{selectedModels}
+										messages={workflowMessages}
+										{model}
+										{editCodeBlock}
+										bind:expanded={workflowCardExpanded}
+									/>
+								</div>
+							{/if}
+
 							{#if message.content && message.error !== true}
 								<!-- always show message contents even if there's an error -->
 								<!-- unless message.error === true which is legacy error handling, where the error message is stored in message.content -->
-									<ContentRenderer
-										id={`${chatId}-${message.id}`}
-										messageId={message.id}
-										{history}
-										{selectedModels}
+								<ContentRenderer
+									id={`${chatId}-${message.id}`}
+									messageId={message.id}
+									{history}
+									{selectedModels}
 									content={displayedAssistantContent}
 									sources={message.sources}
 									floatingButtons={shouldShowMessageActions &&
@@ -1558,62 +1650,62 @@
 								/>
 							{/if}
 
-								{#if message.code_executions}
-									<CodeExecutions codeExecutions={message.code_executions} />
-								{/if}
+							{#if message.code_executions}
+								<CodeExecutions codeExecutions={message.code_executions} />
+							{/if}
 
-								{#if shouldShowFiles}
-									<div
-										class="my-2 w-full flex overflow-x-auto gap-2 flex-wrap"
-										dir={$settings?.chatDirection ?? 'auto'}
-										in:fade={{ duration: 180 }}
+							{#if shouldShowFiles}
+								<div
+									class="my-2 w-full flex overflow-x-auto gap-2 flex-wrap"
+									dir={$settings?.chatDirection ?? 'auto'}
+									in:fade={{ duration: 180 }}
+								>
+									{#each displayedFiles as file}
+										<div>
+											{#if file.type === 'image' || (file?.content_type ?? '').startsWith('image/')}
+												<Image src={file.url} alt={imageAltText} />
+											{:else}
+												<FileItem
+													item={file}
+													url={file.url}
+													name={file.name}
+													type={file.type}
+													size={file?.size}
+													small={true}
+												/>
+											{/if}
+										</div>
+									{/each}
+								</div>
+							{/if}
+
+							{#if shouldShowUnifiedIndicator}
+								<div class="mt-3">
+									<WorkflowIndicator
+										text={workflowIndicatorText}
+										startedAt={fallbackThinkingStartedAt}
+										cacheKey={assistantSegmentCacheKey}
+										expandable={hasWorkflowDetails}
+										animated={shouldAnimateUnifiedIndicator}
+										showElapsed={workflowIndicatorShowElapsed}
+										frozenElapsedSeconds={shouldAnimateUnifiedIndicator
+											? null
+											: workflowIndicatorFrozenElapsedSeconds}
+										bind:open={workflowExpanded}
 									>
-										{#each displayedFiles as file}
-											<div>
-												{#if file.type === 'image' || (file?.content_type ?? '').startsWith('image/')}
-													<Image src={file.url} alt={imageAltText} />
-												{:else}
-													<FileItem
-														item={file}
-														url={file.url}
-														name={file.name}
-														type={file.type}
-														size={file?.size}
-														small={true}
-													/>
-												{/if}
-											</div>
-										{/each}
-									</div>
-								{/if}
-
-								{#if shouldShowUnifiedIndicator}
-									<div class="mt-3">
-										<WorkflowIndicator
-											text={unifiedIndicatorText}
-											startedAt={fallbackThinkingStartedAt}
-											cacheKey={assistantSegmentCacheKey}
-											expandable={hasWorkflowDetails}
-											animated={shouldAnimateUnifiedIndicator}
-											showElapsed={!hasAssistantResponseStarted}
-											frozenElapsedSeconds={shouldAnimateUnifiedIndicator
-												? null
-												: fallbackDisplayedDurationSeconds}
-											bind:open={workflowExpanded}
-										>
-											<div class="space-y-3">
-												{#if model?.info?.meta?.capabilities?.status_updates ?? true}
-													<StatusHistory
-														statusHistory={message?.statusHistory}
-														toolCallDetails={parsedToolCallDetails}
-													/>
-												{/if}
-											</div>
-										</WorkflowIndicator>
-									</div>
-								{/if}
-							</div>
+										<div class="space-y-3">
+											{#if model?.info?.meta?.capabilities?.status_updates ?? true}
+												<StatusHistory
+													statusHistory={message?.statusHistory}
+													toolCallDetails={parsedToolCallDetails}
+												/>
+											{/if}
+										</div>
+									</WorkflowIndicator>
+								</div>
+							{/if}
 						</div>
+					</div>
 				</div>
 
 				{#if !edit}

@@ -1,5 +1,8 @@
 import asyncio
 import logging
+import os
+import re
+import shlex
 import time
 import uuid
 from typing import Any
@@ -28,6 +31,25 @@ from open_webui.socket.main import get_event_call, get_event_emitter
 
 log = logging.getLogger(__name__)
 
+_FRIENDLY_TYPE_MAP = {
+    "userMessage": "理解问题",
+    "reasoning": "深度思考",
+    "tool_call": "调用工具",
+    "tool_result": "处理结果",
+}
+
+_TRIVIAL_COMMANDS = {
+    "cd",
+    "echo",
+    "export",
+    "printf",
+    "pwd",
+    "set",
+    "source",
+    "test",
+    "true",
+}
+
 
 def _unwrap_item(item: ThreadItem | Any) -> Any:
     return item.root if isinstance(item, ThreadItem) else item
@@ -51,6 +73,114 @@ def _coerce_user_message(content: Any) -> str:
     return str(content or "")
 
 
+def _unwrap_shell_command(command: str) -> str:
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        return command.strip()
+
+    if not parts:
+        return command.strip()
+
+    executable = os.path.basename(parts[0]).lower()
+    if executable in {"bash", "sh", "zsh"}:
+        for idx, arg in enumerate(parts[1:], start=1):
+            if arg in {"-c", "-lc"} and idx + 1 < len(parts):
+                return str(parts[idx + 1]).strip()
+
+    return command.strip()
+
+
+def _split_command_segments(command: str) -> list[str]:
+    normalized = _unwrap_shell_command(command).replace("\n", " && ")
+    return [segment.strip() for segment in re.split(r"\s*(?:&&|\|\||;|\|)\s*", normalized) if segment.strip()]
+
+
+def _tokenize_command(segment: str) -> list[str]:
+    try:
+        tokens = shlex.split(segment)
+    except ValueError:
+        tokens = segment.split()
+
+    if not tokens:
+        return []
+
+    if tokens[0] == "env":
+        tokens = tokens[1:]
+
+    while tokens and "=" in tokens[0] and not tokens[0].startswith(("/", ".")):
+        key, _, value = tokens[0].partition("=")
+        if key and value:
+            tokens = tokens[1:]
+            continue
+        break
+
+    if len(tokens) >= 2 and tokens[0] == "command" and tokens[1] == "-v":
+        return ["command", "-v"]
+
+    return tokens
+
+
+def _describe_command_segment(segment: str) -> tuple[str, int]:
+    tokens = _tokenize_command(segment)
+    if not tokens:
+        return "执行系统命令", 0
+
+    executable = os.path.basename(tokens[0]).lower()
+    args = [token.lower() for token in tokens[1:]]
+
+    if executable in _TRIVIAL_COMMANDS:
+        return "获取当前路径", 0 if executable == "pwd" else -1
+
+    if executable in {"rg", "grep"}:
+        return "搜索文件内容", 90
+
+    if executable in {"find", "fd", "ls", "tree"}:
+        return "浏览文件目录", 70
+
+    if executable in {"cat", "head", "tail", "bat", "less", "more"}:
+        return "读取文件", 80
+
+    if executable == "sed" and "-n" in args:
+        return "读取文件", 80
+
+    if executable in {"python", "python3", "node", "nodejs", "tsx", "ts-node"}:
+        return "运行脚本", 85
+
+    if executable in {"pip", "pip3", "npm", "pnpm", "yarn", "bun", "uv", "poetry"}:
+        install_like = {"install", "add", "ci", "sync"}
+        if install_like.intersection(args):
+            return "安装依赖", 85
+        return "运行项目任务", 75
+
+    if executable == "git":
+        return "执行 Git 操作", 75
+
+    if executable in {"libreoffice", "soffice", "convert", "magick"}:
+        return "转换文件格式", 80
+
+    if executable == "pwd":
+        return "获取当前路径", 10
+
+    if executable == "command" and len(tokens) >= 2 and tokens[1] == "-v":
+        return "检查命令可用性", 20
+
+    return "执行系统命令", 30
+
+
+def _describe_command(command: str) -> str:
+    best_description = "执行系统命令"
+    best_score = -1
+
+    for segment in _split_command_segments(command):
+        description, score = _describe_command_segment(segment)
+        if score > best_score:
+            best_description = description
+            best_score = score
+
+    return best_description
+
+
 def describe_item(item: ThreadItem | Any) -> str:
     item = _unwrap_item(item)
 
@@ -61,17 +191,14 @@ def describe_item(item: ThreadItem | Any) -> str:
         return "更新计划"
 
     if isinstance(item, CommandExecutionThreadItem):
-        command = item.command.strip()
-        if len(command) > 120:
-            command = f"{command[:117]}..."
-        return f"执行命令: {command}"
+        return _describe_command(item.command)
 
     if isinstance(item, FileChangeThreadItem):
         count = len(item.changes or [])
         return f"修改文件 ({count})"
 
     item_type = getattr(item, "type", "codex")
-    return f"Codex: {item_type}"
+    return _FRIENDLY_TYPE_MAP.get(item_type, "处理中")
 
 
 def _build_plan_summary(notification: TurnPlanUpdatedNotification) -> str:
@@ -119,6 +246,24 @@ def _build_codex_message(base_message: dict[str, Any], message_id: str, parent_i
     return message
 
 
+def _normalize_unix_seconds(value: Any) -> int | None:
+    if value is None:
+        return None
+
+    try:
+        numeric_value = float(value)
+    except (TypeError, ValueError):
+        return None
+
+    if not numeric_value or numeric_value <= 0:
+        return None
+
+    if numeric_value > 1_000_000_000_000:
+        numeric_value /= 1000
+
+    return int(numeric_value)
+
+
 async def _ensure_agent_message(
     item_id: str,
     state: dict[str, Any],
@@ -140,6 +285,7 @@ async def _ensure_agent_message(
         mapped_id,
         state["last_message_id"],
     )
+    state["message_timestamps"][mapped_id] = message["timestamp"]
     state["item_message_ids"][item_id] = mapped_id
     state["last_message_id"] = mapped_id
 
@@ -189,6 +335,8 @@ async def translate_and_emit(
 
     if method == "item/started" and isinstance(payload, ItemStartedNotification):
         item = _unwrap_item(payload.item)
+        started_at = int(time.time())
+        message_state["item_started_at"][item.id] = started_at
         message_id = (
             await _ensure_agent_message(item.id, message_state, event_emitter)
             if isinstance(item, AgentMessageThreadItem)
@@ -202,6 +350,7 @@ async def translate_and_emit(
                     "action": "codex",
                     "description": describe_item(item),
                     "done": False,
+                    "started_at": started_at,
                 },
             }
         )
@@ -209,6 +358,9 @@ async def translate_and_emit(
 
     if method == "item/completed" and isinstance(payload, ItemCompletedNotification):
         item = _unwrap_item(payload.item)
+        ended_at = int(time.time())
+        started_at = message_state["item_started_at"].get(item.id) or ended_at
+        duration = max(0, ended_at - started_at)
         message_id = (
             await _ensure_agent_message(item.id, message_state, event_emitter)
             if isinstance(item, AgentMessageThreadItem)
@@ -222,6 +374,9 @@ async def translate_and_emit(
                     "action": "codex",
                     "description": describe_item(item),
                     "done": True,
+                    "started_at": started_at,
+                    "ended_at": ended_at,
+                    "duration": duration,
                 },
             }
         )
@@ -259,34 +414,27 @@ async def translate_and_emit(
                 event_emitter,
                 message_id,
                 "chat:message:update",
-                {"message": {"done": True}},
+                {
+                    "message": {
+                        "done": True,
+                        "pseudoDoneDurationSeconds": max(
+                            1,
+                            ended_at
+                            - (
+                                message_state["message_timestamps"].get(message_id)
+                                or _normalize_unix_seconds(message_state["root_message"].get("timestamp"))
+                                or ended_at
+                            ),
+                        ),
+                    }
+                },
             )
         return
 
     if method == "item/commandExecution/outputDelta":
-        await _emit_to_message(
-            event_emitter,
-            message_state["last_message_id"] or message_state["root_message_id"],
-            "status",
-            {
-                "action": "command_output",
-                "description": payload.delta,
-                "done": False,
-            },
-        )
         return
 
     if method == "item/fileChange/outputDelta":
-        await _emit_to_message(
-            event_emitter,
-            message_state["last_message_id"] or message_state["root_message_id"],
-            "status",
-            {
-                "action": "file_change",
-                "description": payload.delta,
-                "done": False,
-            },
-        )
         return
 
     if method == "item/plan/delta" and isinstance(payload, PlanDeltaNotification):
@@ -397,6 +545,10 @@ async def codex_chat_completion(
         "last_message_id": None,
         "item_message_ids": {},
         "item_contents": {},
+        "item_started_at": {},
+        "message_timestamps": {
+            message_id: _normalize_unix_seconds(root_message.get("timestamp")) or int(time.time())
+        },
     }
     turn_handle = None
 

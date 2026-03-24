@@ -435,7 +435,9 @@
 			return systemTerminal.id;
 		}
 
-		const directTerminal = ($terminalServers ?? []).find((terminal) => !terminal?.id && terminal?.url);
+		const directTerminal = ($terminalServers ?? []).find(
+			(terminal) => !terminal?.id && terminal?.url
+		);
 		return directTerminal?.url ?? null;
 	};
 
@@ -580,12 +582,12 @@
 
 		return cleanText(
 			removeAllDetails(processDetails(renderedContent))
-			.replace(/<details[^>]*>[\s\S]*$/gi, ' ')
-			.replace(/<\/?summary[^>]*>/gi, ' ')
-			.replace(/<[^>]+>/g, ' ')
-			.replace(/&nbsp;/g, ' ')
-			.replace(/\s+/g, ' ')
-			.trim()
+				.replace(/<details[^>]*>[\s\S]*$/gi, ' ')
+				.replace(/<\/?summary[^>]*>/gi, ' ')
+				.replace(/<[^>]+>/g, ' ')
+				.replace(/&nbsp;/g, ' ')
+				.replace(/\s+/g, ' ')
+				.trim()
 		);
 	};
 
@@ -597,9 +599,7 @@
 		if (typeof message.content === 'string') {
 			if (
 				/<details\b(?=[^>]*\btype="tool_calls")[^>]*\bdone="false"/i.test(message.content) ||
-				/<details\b(?=[^>]*\btype="code_interpreter")[^>]*\bdone="false"/i.test(
-					message.content
-				)
+				/<details\b(?=[^>]*\btype="code_interpreter")[^>]*\bdone="false"/i.test(message.content)
 			) {
 				return true;
 			}
@@ -709,15 +709,15 @@
 					Math.floor(Date.now() / 1000) - Math.floor(currentMessage.timestamp ?? Date.now() / 1000)
 				);
 
-					history.messages[messageId] = {
-						...currentMessage,
-						done: true,
-						pseudoDone: true,
-						pseudoDoneDurationSeconds: durationSeconds
-					};
-				}, 900)
-			);
-		};
+				history.messages[messageId] = {
+					...currentMessage,
+					done: true,
+					pseudoDone: true,
+					pseudoDoneDurationSeconds: durationSeconds
+				};
+			}, 900)
+		);
+	};
 
 	const forceVisualCompletion = (messageId, message) => {
 		if (!message || message.done === true) {
@@ -823,13 +823,13 @@
 			const type = event?.data?.type ?? null;
 			const data = event?.data?.data ?? null;
 
-				if (type === 'chat:active') {
-					const active = data?.active ?? false;
+			if (type === 'chat:active') {
+				const active = data?.active ?? false;
 
-					if (!active) {
-						clearVisualCompletionTracking(event.message_id);
-						taskIds = null;
-						generating = false;
+				if (!active) {
+					clearVisualCompletionTracking(event.message_id);
+					taskIds = null;
+					generating = false;
 					generationController = null;
 
 					const focusMessageId = getDeepestVisibleMessageId(history, event.message_id);
@@ -1970,7 +1970,10 @@
 						.filter((item) => item?.action === 'artifact_uploaded' && Array.isArray(item?.files))
 						.flatMap((item) => item.files ?? []);
 
-		if (artifactFiles.length > 0 && (!normalizedMessage.files || normalizedMessage.files.length === 0)) {
+		if (
+			artifactFiles.length > 0 &&
+			(!normalizedMessage.files || normalizedMessage.files.length === 0)
+		) {
 			normalizedMessage.files = artifactFiles;
 		}
 
@@ -2027,7 +2030,7 @@
 			const normalizedMessage = normalizeArtifactMessage(message);
 			normalizedHistory.messages[messageId] =
 				normalizedMessage?.role === 'assistant'
-					? { ...normalizedMessage, done: true }
+					? { ...normalizedMessage, done: normalizedMessage.done ?? true }
 					: normalizedMessage;
 		}
 
@@ -2054,7 +2057,10 @@
 
 	const syncChatFromServer = async (
 		_chatId,
-		{ focusMessageId = null, emitFinish = false }: { focusMessageId?: string | null; emitFinish?: boolean } = {}
+		{
+			focusMessageId = null,
+			emitFinish = false
+		}: { focusMessageId?: string | null; emitFinish?: boolean } = {}
 	) => {
 		if (
 			!_chatId ||
@@ -3068,9 +3074,7 @@
 					...$settings?.params,
 					...params,
 					stop: getStopTokens(),
-					...(getReasoningEffort(model)
-						? { reasoning_effort: getReasoningEffort(model) }
-						: {})
+					...(getReasoningEffort(model) ? { reasoning_effort: getReasoningEffort(model) } : {})
 				},
 
 				files: (files?.length ?? 0) > 0 ? files : undefined,

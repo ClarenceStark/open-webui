@@ -8,9 +8,6 @@
 	import { slide } from 'svelte/transition';
 	import { quintOut } from 'svelte/easing';
 
-	import ChevronUp from '$lib/components/icons/ChevronUp.svelte';
-	import ChevronDown from '$lib/components/icons/ChevronDown.svelte';
-
 	const i18n = getContext('i18n');
 
 	export let text: string | null = null;
@@ -113,8 +110,22 @@
 		}
 	}
 
+	// When animated becomes false (e.g. "已完成"), freeze the timer at the current value
+	// and stop the interval. This handles the case where frozenElapsedSeconds is null
+	// but the indicator is already in the completed state.
+	$: if (!animated && timer) {
+		clearInterval(timer);
+		timer = null;
+	}
+
 	onMount(() => {
-		startTimer();
+		if (animated) {
+			startTimer();
+		} else {
+			// Already completed on mount (e.g. page reload).
+			// Use frozenElapsedSeconds if available, otherwise keep 0.
+			syncElapsed();
+		}
 	});
 
 	onDestroy(() => {
@@ -146,14 +157,6 @@
 				{#if showElapsed}
 					<span class="thinking-indicator__divider" aria-hidden="true"></span>
 					<span class="thinking-indicator__timer">{formatElapsed(elapsedSeconds)}</span>
-				{/if}
-			</div>
-
-			<div class="workflow-indicator__chevron" aria-hidden="true">
-				{#if open}
-					<ChevronUp strokeWidth="3.5" className="size-3.5" />
-				{:else}
-					<ChevronDown strokeWidth="3.5" className="size-3.5" />
 				{/if}
 			</div>
 		</button>
@@ -189,19 +192,11 @@
 	.workflow-indicator__button {
 		display: inline-flex;
 		align-items: center;
-		gap: 0.5rem;
 		padding: 0;
 		border: 0;
 		background: transparent;
 		color: inherit;
 		text-align: left;
-	}
-
-	.workflow-indicator__chevron {
-		display: inline-flex;
-		align-items: center;
-		color: #9c9c9c;
-		transform: translateY(1px);
 	}
 
 	.workflow-indicator__content {
