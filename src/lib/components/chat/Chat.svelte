@@ -3152,7 +3152,7 @@
 
 	const stopResponse = async () => {
 		const isCodexModel = selectedModelIds.some(
-			(modelId) => modelId === 'codex' || modelId.startsWith('codex/')
+			(modelId) => modelId === 'gpt-5.4' || modelId.startsWith('codex/')
 		);
 
 		if (isCodexModel && $chatId) {

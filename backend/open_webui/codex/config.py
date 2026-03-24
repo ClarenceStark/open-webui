@@ -46,6 +46,8 @@ def get_workspace_path(chat_id: str) -> Path:
 
 
 def get_model_override(model_id: str | None) -> str | None:
+    if model_id == "gpt-5.4":
+        return "gpt-5.4"
     if model_id and model_id.startswith("codex/"):
         override = model_id.split("/", 1)[1].strip()
         if override:
