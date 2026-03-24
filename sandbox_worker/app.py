@@ -36,6 +36,12 @@ TMP_ROOT = Path(
         "/tmp",
     )
 ).resolve()
+SKILLS_ROOT = Path(
+    os.environ.get(
+        "SANDBOX_SKILLS_ROOT",
+        "/skills",
+    )
+).resolve()
 
 TMP_ROOT.mkdir(parents=True, exist_ok=True)
 
@@ -223,6 +229,7 @@ def resolve_path(path: str, user_id: str, scope: str) -> tuple[Optional[Path], s
     roots = {
         "/workspace": WORKSPACE_ROOT,
         "/tmp": TMP_ROOT,
+        "/skills": SKILLS_ROOT,
     }
 
     for prefix, root in roots.items():
@@ -261,6 +268,12 @@ def real_to_virtual_path(path: Path) -> str:
     except ValueError:
         pass
 
+    try:
+        relative = path.resolve().relative_to(SKILLS_ROOT)
+        return str(PurePosixPath("/skills") / PurePosixPath(relative.as_posix()))
+    except ValueError:
+        pass
+
     raise HTTPException(status_code=403, detail="Path is outside sandbox roots")
 
 
@@ -284,14 +297,18 @@ def virtual_to_real_in_text(text: str) -> str:
 
     workspace_root = str(WORKSPACE_ROOT)
     tmp_root = str(TMP_ROOT)
+    skills_root = str(SKILLS_ROOT)
 
     converted = text.replace("/workspace/", f"{workspace_root.rstrip('/')}/")
     converted = converted.replace("/tmp/", f"{tmp_root.rstrip('/')}/")
+    converted = converted.replace("/skills/", f"{skills_root.rstrip('/')}/")
 
     if "/workspace" in converted:
         converted = converted.replace("/workspace", workspace_root)
     if "/tmp" in converted:
         converted = converted.replace("/tmp", tmp_root)
+    if "/skills" in converted:
+        converted = converted.replace("/skills", skills_root)
 
     return converted
 
@@ -302,14 +319,18 @@ def real_to_virtual_in_text(text: str) -> str:
 
     workspace_root = str(WORKSPACE_ROOT)
     tmp_root = str(TMP_ROOT)
+    skills_root = str(SKILLS_ROOT)
 
     converted = text.replace(f"{workspace_root.rstrip('/')}/", "/workspace/")
     converted = converted.replace(f"{tmp_root.rstrip('/')}/", "/tmp/")
+    converted = converted.replace(f"{skills_root.rstrip('/')}/", "/skills/")
 
     if workspace_root in converted:
         converted = converted.replace(workspace_root, "/workspace")
     if tmp_root in converted:
         converted = converted.replace(tmp_root, "/tmp")
+    if skills_root in converted:
+        converted = converted.replace(skills_root, "/skills")
 
     return converted
 
@@ -547,6 +568,8 @@ async def api_config():
         "sandbox": {
             "workspace_root": str(WORKSPACE_ROOT),
             "tmp_root": str(TMP_ROOT),
+            "skills_root": str(SKILLS_ROOT),
+            "allowed_roots": ["/workspace", "/tmp", "/skills"],
             "runner_configured": bool(SANDBOX_RUNNER),
         },
         "python": {
@@ -679,13 +702,18 @@ async def list_directory(
             "entries": [
                 {"name": "workspace", "type": "directory"},
                 {"name": "tmp", "type": "directory"},
+                {"name": "skills", "type": "directory"},
             ]
         }
 
     ensure_directory(real_path)
     entries = []
     for child in sorted(real_path.iterdir(), key=lambda item: (item.is_file(), item.name.lower())):
-        stat = child.stat()
+        try:
+            stat = child.stat()
+        except FileNotFoundError:
+            # Ignore broken symlinks inside mounted skill directories.
+            continue
         entries.append(
             {
                 "name": child.name,
@@ -902,6 +930,7 @@ async def list_files_tool(
         entries = [
             {"name": "workspace", "type": "directory"},
             {"name": "tmp", "type": "directory"},
+            {"name": "skills", "type": "directory"},
         ]
     else:
         ensure_directory(real_path)

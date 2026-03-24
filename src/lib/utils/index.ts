@@ -1039,6 +1039,14 @@ export const sanitizeAssistantDisplayContent = (content: string, done: boolean =
 		}
 	}
 
+	// Defensive: strip orphaned partial `</details>` or `</summary>` closing tags
+	// that can leak when smooth-streaming slices content mid-tag, regardless of done state.
+	// Matches progressive prefixes like `</de`, `</detail`, `</summar`, etc.
+	sanitized = sanitized.replace(
+		/<\/d(?:e(?:t(?:a(?:i(?:l(?:s?)?)?)?)?)?)?[^>]*$|<\/s(?:u(?:m(?:m(?:a(?:r(?:y?)?)?)?)?)?)?[^>]*$|<summary[^>]*$/i,
+		''
+	);
+
 	return sanitized;
 };
 

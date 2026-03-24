@@ -767,6 +767,7 @@
 			}
 
 			if (visibleUnitsCount < targetContentUnits.length) {
+				visibleDone = false;
 				scheduleContentPlayback();
 			} else if (targetDone) {
 				visibleDone = true;

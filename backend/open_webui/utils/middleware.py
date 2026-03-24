@@ -83,6 +83,10 @@ from open_webui.retrieval.utils import get_sources_from_items
 
 from open_webui.utils.sanitize import sanitize_code
 from open_webui.utils.chat import generate_chat_completion
+from open_webui.utils.file_skills import (
+    discover_file_skills,
+    get_file_skills_dir,
+)
 from open_webui.utils.task import (
     get_task_model_id,
     rag_template,
@@ -479,6 +483,18 @@ def build_terminal_attachment_prompt(mounted_files: list[dict], target_dir: str)
     lines.append(
         "The sandbox Python environment is persistent across commands. If your script fails because a package/module is missing, proactively install it with python3 -m pip install <package> in the sandbox, then retry."
     )
+    lines.append(
+        "If a required system runtime or CLI tool is missing (for example node, npm, ffmpeg, libreoffice, or poppler), proactively install it yourself with mkdir -p /tmp/apt-archives/partial && apt-get update && apt-get -o Dir::Cache::Archives=/tmp/apt-archives install -y <packages>, verify it with command -v <tool>, and then retry."
+    )
+    lines.append(
+        "When you create, export, or modify a file for the user in the sandbox, return the final file to the user in chat before finishing. Prefer calling download_artifact for the final deliverable."
+    )
+    lines.append(
+        "Do not claim that a file is attached, uploaded, sent, shared, or ready to download unless that file has actually been returned to the chat."
+    )
+    lines.append(
+        "Automatic upload from printing an exact output path is only a fallback. For user-facing deliverables such as docx, pdf, pptx, xlsx, csv, zip, or generated images, call download_artifact explicitly unless the file is already confirmed in chat."
+    )
     if has_image_file:
         lines.append(
             "Image-editing workflow: use the model's vision on the attached image to locate the target, then use exec_command with python3 plus Pillow/matplotlib to create a NEW annotated image file in the sandbox."
@@ -532,12 +548,76 @@ def build_terminal_execution_prompt(metadata: Optional[dict]) -> str:
         "For Python work, prefer a project-local .venv inside the current working directory or repository within this session.",
         "If .venv does not exist yet, you may create and configure it yourself with python3 -m venv .venv, upgrade pip inside it, install the required packages there, and then run commands with .venv/bin/python or .venv/bin/pip.",
         "If a local .venv already exists, reuse it instead of creating another environment.",
+        "This sandbox is allowed to install system packages. If a required runtime or CLI tool is missing, proactively run mkdir -p /tmp/apt-archives/partial && apt-get update && apt-get -o Dir::Cache::Archives=/tmp/apt-archives install -y <packages>, verify with command -v <tool>, and then retry the original task.",
+        "Prefer local .venv installs for Python packages, and use apt-get for OS-level packages and runtimes that cannot be satisfied inside the local project environment.",
         "Do not rely on the system Python or shared environments such as /workspace/venvs/default or /workspace/venvs/data unless the user explicitly requests that exact environment.",
         "Do not read from or write to sibling session directories such as /workspace/sessions/chat_* or /workspace/sessions/session_* that are outside the current session root.",
         "Do not inspect, reuse, or depend on files from another session's inputs, outputs, artifacts, or tmp directories.",
         "If a required file is missing from the current session, ask the user to upload it again or copy it into the current session workspace before continuing.",
+        "When you create, export, or modify a file for the user in the sandbox, you must return the final file to the user in chat before finishing. Prefer calling download_artifact for the final deliverable.",
+        "Do not merely leave the file in the sandbox and mention its path. Do not claim that a file is attached, uploaded, sent, shared, or ready to download unless it has actually been returned to the chat.",
+        "Automatic upload from printing an exact output path is a fallback, not the primary plan. For user-facing deliverables such as docx, pdf, pptx, xlsx, csv, zip, or generated images, call download_artifact explicitly unless the file is already confirmed in chat.",
+        "The /skills/ directory contains shared skill definitions. You may read SKILL.md and related files from this directory when using a skill.",
+        "The /skills/ directory is readable from both shell commands and file tools such as list_files and read_file.",
     ]
     return "<sandbox_rules>\n" + "\n".join(lines) + "\n</sandbox_rules>"
+
+
+def render_file_skills_section(file_skills, skills_dir) -> Optional[str]:
+    if not file_skills:
+        return None
+
+    skills_dir = skills_dir.expanduser().resolve()
+    lines = [
+        "## Skills",
+        "A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list of skills that can be used. Each entry includes a name, description, and file path so you can open the source for full instructions when using a specific skill.",
+        "### Available skills",
+    ]
+
+    for skill in file_skills:
+        try:
+            relative_path = skill.skill_md_path.relative_to(skills_dir).as_posix()
+            display_path = f"/skills/{relative_path}"
+        except ValueError:
+            display_path = skill.skill_md_path.as_posix()
+        lines.append(f"- {skill.name}: {skill.description} (file: {display_path})")
+
+    lines.extend(
+        [
+            "### How to use skills",
+            "- Discovery: The list above is the skills available in this session (name + description + file path). Skill bodies live on disk at the listed paths.",
+            "- Trigger rules: If the user names a skill (with `$SkillName` or plain text) OR the task clearly matches a skill's description shown above, you must use that skill for that turn. Multiple mentions mean use them all. Do not carry skills across turns unless re-mentioned.",
+            "- Missing/blocked: If a named skill isn't in the list or the path can't be read, say so briefly and continue with the best fallback.",
+            "- How to use a skill (progressive disclosure):",
+            "  1) After deciding to use a skill, open its `SKILL.md`. Read only enough to follow the workflow.",
+            "  2) When `SKILL.md` references relative paths (e.g., `scripts/foo.py`), resolve them relative to the skill directory listed above first, and only consider other paths if needed.",
+            "  3) If `SKILL.md` points to extra folders such as `references/`, load only the specific files needed for the request; don't bulk-load everything.",
+            "  4) If `scripts/` exist, prefer running or patching them instead of retyping large code blocks.",
+            "  5) If `assets/` or templates exist, reuse them instead of recreating from scratch.",
+            "- Coordination and sequencing:",
+            "  - If multiple skills apply, choose the minimal set that covers the request and state the order you'll use them.",
+            "  - Announce which skill(s) you're using and why (one short line). If you skip an obvious skill, say why.",
+            "- Context hygiene:",
+            "  - Keep context small: summarize long sections instead of pasting them; only load extra files when needed.",
+            "  - Avoid deep reference-chasing: prefer opening only files directly linked from `SKILL.md` unless you're blocked.",
+            "  - When variants exist (frameworks, providers, domains), pick only the relevant reference file(s) and note that choice.",
+            "- Safety and fallback: If a skill can't be applied cleanly (missing files, unclear instructions), state the issue, pick the next-best approach, and continue.",
+        ]
+    )
+
+    return "<skills_instructions>\n" + "\n".join(lines) + "\n</skills_instructions>"
+
+
+def get_triggered_file_skills(file_skills, prompt: Optional[str]):
+    if not prompt:
+        return []
+
+    matched = []
+    for skill in file_skills:
+        pattern = rf"(?<![A-Za-z0-9_-])\${re.escape(skill.name)}(?![A-Za-z0-9_-])"
+        if re.search(pattern, prompt, flags=re.IGNORECASE):
+            matched.append(skill)
+    return matched
 
 
 TERMINAL_TOOL_NAMES = {
@@ -3835,7 +3915,24 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                 append=True,
             )
 
+    file_skills_dir = get_file_skills_dir()
+    file_skills = discover_file_skills(file_skills_dir)
+    file_skills_section = render_file_skills_section(file_skills, file_skills_dir)
+    if file_skills_section:
+        form_data["messages"] = add_or_update_system_message(
+            file_skills_section,
+            form_data["messages"],
+            append=True,
+        )
+
     prompt = get_last_user_message(form_data["messages"])
+    for file_skill in get_triggered_file_skills(file_skills, prompt):
+        form_data["messages"] = add_or_update_system_message(
+            f'<skill name="{file_skill.name}" source="file">\n{file_skill.content}\n</skill>',
+            form_data["messages"],
+            append=True,
+        )
+
     # TODO: re-enable URL extraction from prompt
     # urls = []
     # if prompt and len(prompt or "") < 500 and (not files or len(files) == 0):
@@ -4135,6 +4232,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                     "__skill_ids__": [
                         s.id for s in available_skills if s.id not in user_skill_ids
                     ],
+                    "__file_skills_enabled__": bool(file_skills),
                 },
                 builtin_features,
                 model,

@@ -82,6 +82,7 @@ from open_webui.tools.builtin import (
     view_file,
     view_knowledge_file,
     view_skill,
+    view_file_skill,
 )
 
 import copy
@@ -548,6 +549,8 @@ def get_builtin_tools(
     # Skills tools - view_skill allows model to load full skill instructions on demand
     if extra_params.get("__skill_ids__"):
         builtin_functions.append(view_skill)
+    if extra_params.get("__file_skills_enabled__"):
+        builtin_functions.append(view_file_skill)
 
     for func in builtin_functions:
         callable = get_async_tool_function_and_apply_extra_params(
@@ -1087,10 +1090,14 @@ async def get_terminal_tools(
                 + "\nFor Python work, default to a local .venv in the current working directory or repository."
                 + "\nIf .venv does not exist, you may create and configure it yourself with python3 -m venv .venv, install dependencies into it, and then use .venv/bin/python or .venv/bin/pip for subsequent commands."
                 + "\nIf a local .venv already exists, reuse it instead of creating another environment."
+                + "\nIf a required runtime or CLI tool is missing, proactively install it yourself with mkdir -p /tmp/apt-archives/partial && apt-get update && apt-get -o Dir::Cache::Archives=/tmp/apt-archives install -y <packages>, verify it with command -v <tool>, and then retry."
+                + "\nPrefer local .venv installs for Python packages, and use apt-get for OS-level packages and runtimes that cannot be satisfied inside the local project environment."
                 + "\nDo not rely on system Python or shared environments such as /workspace/venvs/default or /workspace/venvs/data unless the user explicitly asks for them."
                 + "\nDo not read from or write to sibling session directories under /workspace/sessions/ that are outside the current session root."
                 + "\nIf a command fails because a Python package is missing, install it inside the local .venv and retry."
-                + "\nIf your command prints the exact output file path on its own line, the system may automatically upload that generated file back into chat for the user."
+                + "\nWhen you create, export, or modify a file for the user, you must return the final file to the user in chat before finishing. Prefer calling download_artifact for the final deliverable."
+                + "\nDo not claim that a file is attached, uploaded, sent, shared, or ready to download unless it has actually been returned to the chat."
+                + "\nIf your command prints the exact output file path on its own line, the system may automatically upload that generated file back into chat for the user, but this is only a fallback."
             )
         if function_name == "view_image":
             tool_spec["description"] = (
@@ -1102,6 +1109,7 @@ async def get_terminal_tools(
             tool_spec["description"] = (
                 tool_spec.get("description", "")
                 + "\n\nUse this after generating a new file in the sandbox when you want the user to receive that file in chat."
+                + "\nFor final user-facing deliverables, prefer this explicitly instead of relying on automatic upload from a printed path."
             )
 
         def make_tool_function(fn_name, srv_data, hdrs, cks):

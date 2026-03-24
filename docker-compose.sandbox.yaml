@@ -6,8 +6,8 @@ services:
     container_name: open-webui-sandbox
     ports:
       - "127.0.0.1:8765:8765"
-    user: "10001:10001"
-    read_only: true
+    user: "0:0"
+    read_only: false
     tmpfs:
       - /tmp:mode=1777
       - /run:mode=755
@@ -16,16 +16,25 @@ services:
         source: /Users/clarencestark/.open-webui/workdir
         target: /workspace
         read_only: false
+      - type: bind
+        source: /Users/clarencestark/.open-webui/skills
+        target: /skills
+        read_only: true
     environment:
       SANDBOX_WORKSPACE_ROOT: /workspace
+      SANDBOX_SKILLS_ROOT: /skills
       SANDBOX_TMP_ROOT: /tmp
       SANDBOX_SHELL: /bin/bash
-      SANDBOX_AUTO_INSTALL_PYTHON_PACKAGES: "false"
+      SANDBOX_AUTO_INSTALL_PYTHON_PACKAGES: "true"
+      SANDBOX_ALLOW_SYSTEM_PACKAGE_INSTALLS: "true"
+      NODE_PATH: /usr/local/lib/node_modules
+      PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
     command:
       - /bin/bash
       - -lc
       - >
         mkdir -p /workspace/{projects,uploads,tmp,outputs,bin,logs,cache,artifacts,venvs}
+        && mkdir -p /tmp/apt-archives/partial
         && ln -sfn /opt/venvs/default /workspace/venvs/default
         && ln -sfn /opt/venvs/data /workspace/venvs/data
         && exec /opt/venvs/default/bin/python -m uvicorn sandbox_worker.app:app --host 0.0.0.0 --port 8765

@@ -2099,3 +2099,35 @@ async def view_skill(
     except Exception as e:
         log.exception(f"view_skill error: {e}")
         return json.dumps({"error": str(e)})
+
+
+async def view_file_skill(
+    name: str,
+    __request__: Request = None,
+    __user__: dict = None,
+) -> str:
+    """
+    Load the full instructions of a file-based skill by its name from ~/.open-webui/skills.
+    Use this when you need detailed instructions for a skill listed in <skills_instructions>.
+
+    :param name: The name of the file skill to load
+    :return: JSON with the file skill name, path, and markdown content
+    """
+    try:
+        from open_webui.utils.file_skills import get_file_skill_by_name
+
+        skill = get_file_skill_by_name(name)
+        if not skill:
+            return json.dumps({"error": f"File skill '{name}' not found"})
+
+        return json.dumps(
+            {
+                "name": skill.name,
+                "path": skill.skill_md_path.as_posix(),
+                "content": skill.content,
+            },
+            ensure_ascii=False,
+        )
+    except Exception as e:
+        log.exception(f"view_file_skill error: {e}")
+        return json.dumps({"error": str(e)})
