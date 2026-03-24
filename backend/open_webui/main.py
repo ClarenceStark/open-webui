@@ -74,6 +74,7 @@ from open_webui.routers import (
     images,
     ollama,
     openai,
+    codex as codex_router,
     retrieval,
     pipelines,
     tasks,
@@ -114,6 +115,8 @@ from open_webui.models.functions import Functions
 from open_webui.models.models import Models
 from open_webui.models.users import UserModel, Users
 from open_webui.models.chats import Chats
+from open_webui.codex.manager import CodexSessionManager
+from open_webui.codex.config import CODEX_SESSION_IDLE_TIMEOUT
 
 from open_webui.config import (
     # Ollama
@@ -647,6 +650,10 @@ async def lifespan(app: FastAPI):
 
     asyncio.create_task(periodic_usage_pool_cleanup())
     asyncio.create_task(periodic_session_pool_cleanup())
+    app.state.codex_manager = CodexSessionManager()
+    app.state.codex_reap_task = asyncio.create_task(
+        app.state.codex_manager.periodic_reap(timeout=CODEX_SESSION_IDLE_TIMEOUT)
+    )
 
     if app.state.config.ENABLE_BASE_MODELS_CACHE:
         try:
@@ -702,6 +709,16 @@ async def lifespan(app: FastAPI):
             log.warning(f"Failed to initialize tool/terminal servers at startup: {e}")
 
     yield
+
+    if hasattr(app.state, "codex_reap_task"):
+        app.state.codex_reap_task.cancel()
+        try:
+            await app.state.codex_reap_task
+        except asyncio.CancelledError:
+            pass
+
+    if hasattr(app.state, "codex_manager"):
+        await app.state.codex_manager.close_all()
 
     if hasattr(app.state, "redis_task_command_listener"):
         app.state.redis_task_command_listener.cancel()
@@ -1526,6 +1543,7 @@ app.mount("/ws", socket_app)
 
 app.include_router(ollama.router, prefix="/ollama", tags=["ollama"])
 app.include_router(openai.router, prefix="/openai", tags=["openai"])
+app.include_router(codex_router.router, prefix="/api/codex", tags=["codex"])
 
 
 app.include_router(pipelines.router, prefix="/api/v1/pipelines", tags=["pipelines"])
@@ -1691,6 +1709,11 @@ async def chat_completion(
         await get_all_models(request, user=user)
 
     model_id = form_data.get("model", None)
+    resolved_model_id = (
+        "codex"
+        if isinstance(model_id, str) and model_id.startswith("codex/")
+        else model_id
+    )
     model_item = form_data.pop("model_item", {})
     tasks = form_data.pop("background_tasks", None)
 
@@ -1698,11 +1721,11 @@ async def chat_completion(
     try:
         model_info = None
         if not model_item.get("direct", False):
-            if model_id not in request.app.state.MODELS:
+            if resolved_model_id not in request.app.state.MODELS:
                 raise Exception("Model not found")
 
-            model = request.app.state.MODELS[model_id]
-            model_info = Models.get_model_by_id(model_id)
+            model = request.app.state.MODELS[resolved_model_id]
+            model_info = Models.get_model_by_id(resolved_model_id)
 
             # Check if user has access to the model
             if not BYPASS_MODEL_ACCESS_CONTROL and (
@@ -1848,6 +1871,14 @@ async def chat_completion(
 
     async def process_chat(request, form_data, user, metadata, model):
         try:
+            current_model_id = form_data.get("model", "")
+            if isinstance(current_model_id, str) and (
+                current_model_id == "codex" or current_model_id.startswith("codex/")
+            ):
+                from open_webui.codex.handler import codex_chat_completion
+
+                return await codex_chat_completion(request, form_data, user, metadata)
+
             form_data, metadata, events = await process_chat_payload(
                 request, form_data, user, metadata, model
             )

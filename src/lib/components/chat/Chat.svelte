@@ -136,7 +136,7 @@
 
 	let selectedModels = [''];
 	let atSelectedModel: Model | undefined;
-	let selectedModelIds = [];
+	let selectedModelIds: string[] = [];
 	$: if (atSelectedModel !== undefined) {
 		selectedModelIds = [atSelectedModel.id];
 	} else {
@@ -164,7 +164,7 @@
 		currentId: null
 	};
 
-	let taskIds = null;
+	let taskIds: string[] | null = null;
 	let pendingStreamMessagePatches = new Map();
 	let pendingStreamMessageFrames = new Map();
 	let visualCompletionTimers = new Map();
@@ -3151,6 +3151,35 @@
 	};
 
 	const stopResponse = async () => {
+		const isCodexModel = selectedModelIds.some(
+			(modelId) => modelId === 'codex' || modelId.startsWith('codex/')
+		);
+
+		if (isCodexModel && $chatId) {
+			const interruptRes = await fetch(`${WEBUI_API_BASE_URL}/codex/interrupt/${$chatId}`, {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+					Authorization: `Bearer ${localStorage.token}`
+				}
+			})
+				.then(async (res) => {
+					if (!res.ok) {
+						throw await res.json();
+					}
+					return res.json();
+				})
+				.catch((error) => {
+					const detail = error?.detail ?? error?.message ?? `${error}`;
+					toast.error(detail);
+					return null;
+				});
+
+			if (interruptRes?.status) {
+				taskIds = null;
+			}
+		}
+
 		if (taskIds) {
 			for (const taskId of taskIds) {
 				const res = await stopTask(localStorage.token, taskId).catch((error) => {
