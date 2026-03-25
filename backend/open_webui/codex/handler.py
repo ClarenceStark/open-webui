@@ -34,7 +34,10 @@ from open_webui.models.chats import Chats
 from open_webui.models.files import Files
 from open_webui.socket.main import get_event_call, get_event_emitter
 from open_webui.storage.provider import Storage
-from open_webui.utils.middleware import upload_artifact_to_chat
+from open_webui.utils.middleware import (
+    background_tasks_handler,
+    upload_artifact_to_chat,
+)
 
 log = logging.getLogger(__name__)
 
@@ -988,6 +991,7 @@ async def codex_chat_completion(
     form_data: dict,
     user,
     metadata: dict,
+    tasks: dict | None = None,
 ) -> JSONResponse:
     chat_id = metadata.get("chat_id")
     message_id = metadata.get("message_id")
@@ -1088,6 +1092,18 @@ async def codex_chat_completion(
                 metadata,
                 user,
             )
+            if tasks:
+                task_metadata = {**metadata, "message_id": final_message_id}
+                await background_tasks_handler(
+                    {
+                        "request": request,
+                        "form_data": form_data,
+                        "user": user,
+                        "metadata": task_metadata,
+                        "tasks": tasks,
+                        "event_emitter": event_emitter,
+                    }
+                )
         finally:
             session.current_turn = None
             session.current_turn_id = None

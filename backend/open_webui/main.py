@@ -1878,7 +1878,9 @@ async def chat_completion(
             ):
                 from open_webui.codex.handler import codex_chat_completion
 
-                return await codex_chat_completion(request, form_data, user, metadata)
+                return await codex_chat_completion(
+                    request, form_data, user, metadata, tasks
+                )
 
             form_data, metadata, events = await process_chat_payload(
                 request, form_data, user, metadata, model
