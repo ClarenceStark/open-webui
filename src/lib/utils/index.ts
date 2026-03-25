@@ -368,7 +368,7 @@ export const compressImage = async (imageUrl, maxWidth, maxHeight) => {
 		img.src = imageUrl;
 	});
 };
-export const generateInitialsImage = (name) => {
+export const generateInitialsImage = (_name) => {
 	const canvas = document.createElement('canvas');
 	const ctx = canvas.getContext('2d');
 	canvas.width = 100;
@@ -381,24 +381,15 @@ export const generateInitialsImage = (name) => {
 		return `${WEBUI_BASE_URL}/user.png`;
 	}
 
-	ctx.fillStyle = '#F39C12';
+	ctx.fillStyle = '#d00e73';
 	ctx.fillRect(0, 0, canvas.width, canvas.height);
 
 	ctx.fillStyle = '#FFFFFF';
-	ctx.font = '40px Helvetica';
+	ctx.font = 'bold 30px Helvetica';
 	ctx.textAlign = 'center';
 	ctx.textBaseline = 'middle';
 
-	const sanitizedName = name.trim();
-	const initials =
-		sanitizedName.length > 0
-			? sanitizedName[0] +
-				(sanitizedName.split(' ').length > 1
-					? sanitizedName[sanitizedName.lastIndexOf(' ') + 1]
-					: '')
-			: '';
-
-	ctx.fillText(initials.toUpperCase(), canvas.width / 2, canvas.height / 2);
+	ctx.fillText('PRO', canvas.width / 2, canvas.height / 2 + 1);
 
 	return canvas.toDataURL();
 };
