@@ -66,25 +66,35 @@
 	import dayjs from 'dayjs';
 	import { getChannels } from '$lib/apis/channels';
 
-	const unregisterServiceWorkers = async () => {
+	const refreshApp = async (href = location.href) => {
 		if ('serviceWorker' in navigator) {
 			try {
 				const registrations = await navigator.serviceWorker.getRegistrations();
-				await Promise.all(registrations.map((r) => r.unregister()));
-				return true;
+				await Promise.all(registrations.map((r) => r.update()));
 			} catch (error) {
-				console.error('Error unregistering service workers:', error);
-				return false;
+				console.error('Error updating service workers:', error);
 			}
 		}
-		return false;
+
+		location.href = href;
+	};
+
+	const isStandaloneApp = () => {
+		if (typeof window === 'undefined') {
+			return false;
+		}
+
+		return (
+			window.matchMedia('(display-mode: standalone)').matches ||
+			window.matchMedia('(display-mode: window-controls-overlay)').matches ||
+			window.navigator.standalone === true
+		);
 	};
 
 	// handle frontend updates (https://svelte.dev/docs/kit/configuration#version)
 	beforeNavigate(async ({ willUnload, to }) => {
 		if (updated.current && !willUnload && to?.url) {
-			await unregisterServiceWorkers();
-			location.href = to.url.href;
+			await refreshApp(to.url.href);
 		}
 	});
 
@@ -101,6 +111,9 @@
 	let syncStatsEventData = null;
 
 	let heartbeatInterval = null;
+	let deferredInstallPrompt = null;
+	let showInstallApp = false;
+	let appShellEnabled = false;
 
 	const BREAKPOINT = 768;
 
@@ -132,8 +145,7 @@
 					($WEBUI_VERSION !== null && version !== $WEBUI_VERSION) ||
 					($WEBUI_DEPLOYMENT_ID !== null && deploymentId !== $WEBUI_DEPLOYMENT_ID)
 				) {
-					await unregisterServiceWorkers();
-					location.href = location.href;
+					await refreshApp(location.href);
 					return;
 				}
 			}
@@ -750,6 +762,39 @@
 			}
 		}
 
+		const syncAppMode = () => {
+			const desktopLikeWidth = window.innerWidth >= BREAKPOINT;
+			const standalone = isStandaloneApp();
+			const electron = Boolean(window?.electronAPI);
+
+			document.documentElement.classList.toggle('pwa-standalone', standalone && !electron);
+			isApp.set(electron || standalone);
+			appShellEnabled = (electron || standalone) && desktopLikeWidth;
+
+			if (!electron && standalone) {
+				appInfo.set({
+					platform: 'pwa',
+					standalone: true
+				});
+			}
+		};
+
+		const beforeInstallPromptHandler = (event) => {
+			event.preventDefault();
+			deferredInstallPrompt = event;
+			showInstallApp = !isStandaloneApp();
+		};
+
+		const appInstalledHandler = () => {
+			deferredInstallPrompt = null;
+			showInstallApp = false;
+			syncAppMode();
+		};
+
+		window.addEventListener('beforeinstallprompt', beforeInstallPromptHandler);
+		window.addEventListener('appinstalled', appInstalledHandler);
+		syncAppMode();
+
 		if (window?.electronAPI) {
 			const info = await window.electronAPI.send({
 				type: 'app:info'
@@ -803,6 +848,8 @@
 			} else {
 				mobile.set(false);
 			}
+
+			syncAppMode();
 		};
 		window.addEventListener('resize', onResize);
 
@@ -942,6 +989,8 @@
 
 		return () => {
 			window.removeEventListener('resize', onResize);
+			window.removeEventListener('beforeinstallprompt', beforeInstallPromptHandler);
+			window.removeEventListener('appinstalled', appInstalledHandler);
 			window.removeEventListener('message', windowMessageEventHandler);
 			document.removeEventListener('touchstart', touchstartHandler);
 			document.removeEventListener('touchmove', touchmoveHandler);
@@ -969,6 +1018,26 @@
 	/>
 </svelte:head>
 
+{#if showInstallApp && !$isApp}
+	<button
+		class="fixed z-40 right-4 bottom-4 md:right-6 md:bottom-6 rounded-full px-4 py-2.5 text-sm font-medium bg-gray-900 text-white shadow-xl hover:bg-black transition dark:bg-white dark:text-black dark:hover:bg-gray-200"
+		on:click={async () => {
+			if (!deferredInstallPrompt) {
+				return;
+			}
+
+			await deferredInstallPrompt.prompt();
+			const { outcome } = await deferredInstallPrompt.userChoice;
+			console.log('PWA install prompt outcome', outcome);
+
+			deferredInstallPrompt = null;
+			showInstallApp = false;
+		}}
+	>
+		Install App
+	</button>
+{/if}
+
 {#if showRefresh}
 	<div class=" py-5">
 		<Spinner className="size-5" />
@@ -976,8 +1045,8 @@
 {/if}
 
 {#if loaded}
-	{#if $isApp}
-		<div class="flex flex-row h-screen">
+	{#if appShellEnabled}
+		<div class="flex flex-row h-screen pwa-safe-shell">
 			<AppSidebar />
 
 			<div class="w-full flex-1 max-w-[calc(100%-4.5rem)]">

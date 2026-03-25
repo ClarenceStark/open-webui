@@ -2586,23 +2586,33 @@ async def get_manifest_json():
         return requests.get(app.state.EXTERNAL_PWA_MANIFEST_URL).json()
     else:
         return {
+            "id": "/",
             "name": app.state.WEBUI_NAME,
             "short_name": app.state.WEBUI_NAME,
             "description": f"{app.state.WEBUI_NAME} is an open, extensible, user-friendly interface for AI that adapts to your workflow.",
             "start_url": "/",
+            "scope": "/",
             "display": "standalone",
+            "display_override": ["window-controls-overlay", "standalone", "browser"],
+            "theme_color": "#171717",
             "background_color": "#343541",
             "icons": [
                 {
-                    "src": "/static/logo.png",
+                    "src": "/static/web-app-manifest-192x192-v2.png",
                     "type": "image/png",
-                    "sizes": "500x500",
+                    "sizes": "192x192",
+                    "purpose": "any maskable",
+                },
+                {
+                    "src": "/static/web-app-manifest-512x512-v2.png",
+                    "type": "image/png",
+                    "sizes": "512x512",
                     "purpose": "any",
                 },
                 {
-                    "src": "/static/logo.png",
+                    "src": "/static/web-app-manifest-512x512-v2.png",
                     "type": "image/png",
-                    "sizes": "500x500",
+                    "sizes": "512x512",
                     "purpose": "maskable",
                 },
             ],

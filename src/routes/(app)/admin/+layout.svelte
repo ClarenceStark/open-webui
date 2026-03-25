@@ -28,7 +28,7 @@
 
 {#if loaded}
 	<div
-		class=" flex flex-col h-screen max-h-[100dvh] flex-1 transition-width duration-200 ease-in-out {$showSidebar
+		class=" flex flex-col h-screen max-h-[100dvh] flex-1 transition-width duration-200 ease-in-out pwa-safe-shell {$showSidebar
 			? 'md:max-w-[calc(100%-var(--sidebar-width))]'
 			: ' md:max-w-[calc(100%-49px)]'}  w-full max-w-full"
 	>
@@ -105,7 +105,7 @@
 			</div>
 		</nav>
 
-		<div class="  pb-1 flex-1 max-h-full overflow-y-auto">
+		<div class="  pb-1 flex-1 max-h-full overflow-y-auto pwa-scroll-region">
 			<slot />
 		</div>
 	</div>

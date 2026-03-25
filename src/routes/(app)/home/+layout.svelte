@@ -17,7 +17,7 @@
 </svelte:head>
 
 <div
-	class=" flex flex-col w-full h-screen max-h-[100dvh] transition-width duration-200 ease-in-out {$showSidebar
+	class=" flex flex-col w-full h-screen max-h-[100dvh] transition-width duration-200 ease-in-out pwa-safe-shell {$showSidebar
 		? 'md:max-w-[calc(100%-var(--sidebar-width))]'
 		: ''} max-w-full"
 >
@@ -66,7 +66,7 @@
 		</div>
 	</nav>
 
-	<div class=" flex-1 max-h-full overflow-y-auto">
+	<div class=" flex-1 max-h-full overflow-y-auto pwa-scroll-region">
 		<slot />
 	</div>
 </div>

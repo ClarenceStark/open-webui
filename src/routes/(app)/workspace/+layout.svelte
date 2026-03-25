@@ -52,7 +52,7 @@
 
 {#if loaded}
 	<div
-		class=" relative flex flex-col w-full h-screen max-h-[100dvh] transition-width duration-200 ease-in-out {$showSidebar
+		class=" relative flex flex-col w-full h-screen max-h-[100dvh] transition-width duration-200 ease-in-out pwa-safe-shell {$showSidebar
 			? 'md:max-w-[calc(100%-var(--sidebar-width))]'
 			: ''} max-w-full"
 	>
@@ -152,7 +152,7 @@
 		</nav>
 
 		<div
-			class="  pb-1 px-3 md:px-[18px] flex-1 max-h-full overflow-y-auto"
+			class="  pb-1 px-3 md:px-[18px] flex-1 max-h-full overflow-y-auto pwa-scroll-region"
 			id="workspace-container"
 		>
 			<slot />

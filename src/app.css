@@ -348,6 +348,84 @@ body.chat-shell-active {
 	padding-top: 0.6rem;
 }
 
+:root {
+	--app-safe-top: 0px;
+	--app-standalone-surface: #fff;
+}
+
+.dark {
+	--app-standalone-surface: #171717;
+}
+
+html.pwa-standalone {
+	--app-safe-top: env(safe-area-inset-top, 0px);
+	height: 100%;
+	overflow: hidden !important;
+	overscroll-behavior: none;
+	background: var(--app-standalone-surface);
+}
+
+html.pwa-standalone::before {
+	content: '';
+	position: fixed;
+	inset: 0 0 auto 0;
+	height: var(--app-safe-top);
+	background: var(--app-standalone-surface);
+	pointer-events: none;
+	z-index: 60;
+}
+
+html.pwa-standalone body {
+	position: fixed;
+	inset: 0;
+	width: 100%;
+	height: 100%;
+	overflow: hidden !important;
+	overscroll-behavior: none;
+	background: var(--app-standalone-surface);
+}
+
+.pwa-safe-shell {
+	box-sizing: border-box;
+	padding-top: var(--app-safe-top);
+}
+
+html.pwa-standalone .pwa-safe-shell {
+	min-height: 100dvh;
+	max-height: 100dvh;
+	overflow: hidden;
+	background: var(--app-standalone-surface);
+}
+
+.pwa-safe-fixed {
+	top: var(--app-safe-top) !important;
+	height: calc(100dvh - var(--app-safe-top)) !important;
+	max-height: calc(100dvh - var(--app-safe-top)) !important;
+}
+
+.pwa-safe-sidebar {
+	padding-top: calc(var(--app-safe-top) + 2rem);
+}
+
+html.pwa-standalone .pwa-scroll-region {
+	overscroll-behavior-y: contain;
+	-webkit-overflow-scrolling: touch;
+}
+
+html.pwa-standalone #chat-container {
+	height: 100dvh !important;
+	max-height: 100dvh !important;
+	overflow: hidden !important;
+}
+
+html.pwa-standalone #chat-pane {
+	overflow: hidden !important;
+}
+
+html.pwa-standalone #messages-container {
+	overscroll-behavior-y: contain;
+}
+
 .chat-shell #navbar-bg-gradient-to-b {
 	display: none !important;
 }
