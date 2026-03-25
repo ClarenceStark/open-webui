@@ -54,6 +54,7 @@
 		convertMessagesToHistory,
 		copyToClipboard,
 		getMessageContentParts,
+		getAutoChatTitle,
 		createMessagesList,
 		getPromptVariables,
 		processDetails,
@@ -133,6 +134,52 @@
 	let eventConfirmationInputValue = '';
 	let eventConfirmationInputType = '';
 	let eventCallback = null;
+
+	const extractMessageErrorText = (value) => {
+		if (typeof value === 'string') {
+			return value;
+		}
+
+		if (value && typeof value === 'object') {
+			if (typeof value.content === 'string') {
+				return value.content;
+			}
+			if (value.error && typeof value.error.message === 'string') {
+				return value.error.message;
+			}
+			if (typeof value.detail === 'string') {
+				return value.detail;
+			}
+			if (typeof value.message === 'string') {
+				return value.message;
+			}
+		}
+
+		return '';
+	};
+
+	const isTransientReconnectMessageError = (value) => {
+		const text = extractMessageErrorText(value).trim();
+		return /\breconnecting\b/i.test(text);
+	};
+
+	const hasRecoveredFromReconnect = (message) => {
+		if (!message || message.error) {
+			return false;
+		}
+
+		const content =
+			typeof message.content === 'string' ? removeAllDetails(message.content).trim() : '';
+
+		return (
+			content.length > 0 ||
+			(message.statusHistory?.length ?? 0) > 0 ||
+			(message.sources?.length ?? 0) > 0 ||
+			(message.code_executions?.length ?? 0) > 0 ||
+			(message.files?.length ?? 0) > 0 ||
+			message.done === true
+		);
+	};
 
 	let selectedModels = [''];
 	let atSelectedModel: Model | undefined;
@@ -868,6 +915,10 @@
 			let message = history.messages[event.message_id];
 
 			if (message) {
+				if (type !== 'chat:message:error' && message.reconnecting) {
+					delete message.reconnecting;
+				}
+
 				if (type === 'status') {
 					if (message?.statusHistory) {
 						message.statusHistory.push(data);
@@ -939,7 +990,13 @@
 						}
 					}, 100);
 				} else if (type === 'chat:message:error') {
-					message.error = data.error;
+					if (isTransientReconnectMessageError(data?.error)) {
+						message.reconnecting = data.error;
+						delete message.error;
+					} else {
+						delete message.reconnecting;
+						message.error = data.error;
+					}
 				} else if (type === 'chat:message:follow_ups') {
 					message.followUps = data.follow_ups;
 
@@ -2151,6 +2208,7 @@
 		if (existingMessage.role === 'assistant') {
 			const existingScore = assistantMessageCompletenessScore(existingMessage);
 			const incomingScore = assistantMessageCompletenessScore(incomingMessage);
+			const incomingRecoveredFromReconnect = hasRecoveredFromReconnect(incomingMessage);
 
 			if (existingScore >= incomingScore) {
 				if (existingMessage.content !== undefined) {
@@ -2163,8 +2221,24 @@
 					mergedMessage.usage = existingMessage.usage;
 				}
 				if (existingMessage.error && !incomingMessage.error) {
-					mergedMessage.error = existingMessage.error;
+					if (
+						!isTransientReconnectMessageError(existingMessage.error) ||
+						!incomingRecoveredFromReconnect
+					) {
+						mergedMessage.error = existingMessage.error;
+					} else {
+						delete mergedMessage.error;
+					}
 				}
+			}
+
+			if (incomingRecoveredFromReconnect) {
+				delete mergedMessage.reconnecting;
+				if (isTransientReconnectMessageError(mergedMessage.error)) {
+					delete mergedMessage.error;
+				}
+			} else if (existingMessage.reconnecting && !incomingMessage.reconnecting) {
+				mergedMessage.reconnecting = existingMessage.reconnecting;
 			}
 
 			if (existingMessage.done || incomingMessage.done) {
@@ -3430,18 +3504,20 @@
 
 	const initChatHandler = async (history) => {
 		let _chatId = $chatId;
+		const messages = createMessagesList(history, history.currentId);
+		const initialTitle = getAutoChatTitle(messages, $i18n.t('New Chat'));
 
 		if (!$temporaryChatEnabled) {
 			chat = await createNewChat(
 				localStorage.token,
 				{
 					id: _chatId,
-					title: $i18n.t('New Chat'),
+					title: initialTitle,
 					models: selectedModels,
 					system: $settings.system ?? undefined,
 					params: params,
 					history: history,
-					messages: createMessagesList(history, history.currentId),
+					messages: messages,
 					tags: [],
 					timestamp: Date.now()
 				},
@@ -3450,6 +3526,7 @@
 
 			_chatId = chat.id;
 			await chatId.set(_chatId);
+			await chatTitle.set(initialTitle);
 
 			window.history.replaceState(history.state, '', `/c/${_chatId}`);
 
@@ -3471,10 +3548,14 @@
 	const saveChatHandler = async (_chatId, history) => {
 		if ($chatId == _chatId) {
 			if (!$temporaryChatEnabled) {
+				const messages = createMessagesList(history, history.currentId);
+				const persistedTitle = $chatTitle || getAutoChatTitle(messages, $i18n.t('New Chat'));
+
 				chat = await updateChatById(localStorage.token, _chatId, {
+					title: persistedTitle,
 					models: selectedModels,
 					history: history,
-					messages: createMessagesList(history, history.currentId),
+					messages: messages,
 					params: params,
 					files: chatFiles
 				});
@@ -3629,14 +3710,13 @@
 									return;
 								}
 								const messages = createMessagesList(history, history.currentId);
-								const title =
-									messages.find((m) => m.role === 'user')?.content ?? $i18n.t('New Chat');
+								const title = getAutoChatTitle(messages, $i18n.t('New Chat'));
 
 								const savedChat = await createNewChat(
 									localStorage.token,
 									{
 										id: uuidv4(),
-										title: title.length > 50 ? `${title.slice(0, 50)}...` : title,
+										title,
 										models: selectedModels,
 										params: params,
 										history: history,

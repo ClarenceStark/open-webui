@@ -106,6 +106,7 @@
 		pseudoDone?: boolean;
 		pseudoDoneDurationSeconds?: number;
 		error?: boolean | { content: string };
+		reconnecting?: boolean | string | { content: string };
 		sources?: string[];
 		code_executions?: {
 			uuid: string;
@@ -337,9 +338,48 @@
 		return lang.startsWith('en') ? 'Working' : '工作中';
 	};
 
+	const getCodexConnectingLabel = () => {
+		const lang = ($i18n?.language ?? '').toLowerCase();
+		return lang.startsWith('en') ? 'Connecting' : '连接中';
+	};
+
 	const getCodexCompletedLabel = () => {
 		const lang = ($i18n?.language ?? '').toLowerCase();
 		return lang.startsWith('en') ? 'Completed' : '已完成';
+	};
+
+	const extractMessageErrorText = (value: unknown) => {
+		if (typeof value === 'string') {
+			return value;
+		}
+
+		if (value && typeof value === 'object') {
+			if ('content' in value && typeof value.content === 'string') {
+				return value.content;
+			}
+			if (
+				'error' in value &&
+				value.error &&
+				typeof value.error === 'object' &&
+				'message' in value.error &&
+				typeof value.error.message === 'string'
+			) {
+				return value.error.message;
+			}
+			if ('detail' in value && typeof value.detail === 'string') {
+				return value.detail;
+			}
+			if ('message' in value && typeof value.message === 'string') {
+				return value.message;
+			}
+		}
+
+		return '';
+	};
+
+	const isTransientReconnectError = (value: unknown) => {
+		const text = extractMessageErrorText(value).trim();
+		return /\breconnecting\b/i.test(text);
 	};
 
 	const formatThoughtSummary = (durationInSeconds: number | null) => {
@@ -694,6 +734,9 @@
 	$: visibleStatusHistory = (message?.statusHistory ?? []).filter(
 		(item) => item && item.hidden !== true && !STATUS_HISTORY_HIDDEN_ACTIONS.has(item.action)
 	);
+	$: transientReconnectState =
+		message?.reconnecting ??
+		(isTransientReconnectError(message?.error) ? message.error : null);
 	$: parsedToolCallDetails =
 		typeof targetContent === 'string' ? extractToolCallDetails(targetContent) : [];
 	$: latestStatusItem = visibleStatusHistory.at(-1) ?? null;
@@ -772,8 +815,12 @@
 				: fallbackThoughtSummary;
 	$: shouldAnimateUnifiedIndicator =
 		shouldShowUnifiedIndicator && (!finalOutputContentReady || isAwaitingGlobalCompletion);
+	$: isTransientReconnectActive =
+		!isActuallyDone && transientReconnectState !== null && transientReconnectState !== false;
 	$: codexIndicatorText = hasCodexWorkflow
-		? shouldAnimateUnifiedIndicator
+		? isTransientReconnectActive
+			? getCodexConnectingLabel()
+			: shouldAnimateUnifiedIndicator
 			? getCodexWorkingLabel()
 			: getCodexCompletedLabel()
 		: null;
@@ -799,10 +846,15 @@
 	$: workflowIndicatorShowElapsed = hasCodexWorkflow
 		? shouldAnimateUnifiedIndicator || workflowIndicatorFrozenElapsedSeconds !== null
 		: !hasAssistantResponseStarted;
-	$: workflowIndicatorText = codexIndicatorText ?? unifiedIndicatorText;
+	$: workflowIndicatorText = isTransientReconnectActive
+		? getCodexConnectingLabel()
+		: codexIndicatorText ?? unifiedIndicatorText;
 	$: shouldShowUnifiedIndicator =
-		!message.error &&
-		(hasWorkflowDetails || shouldShowFallbackThinking || targetReasoningMetadata !== null);
+		(!message.error || isTransientReconnectError(message.error)) &&
+		(isTransientReconnectActive ||
+			hasWorkflowDetails ||
+			shouldShowFallbackThinking ||
+			targetReasoningMetadata !== null);
 	let workflowExpanded = false;
 	$: imageAltText =
 		typeof displayedAssistantContent === 'string'
@@ -1710,7 +1762,7 @@
 								/>
 							{/if}
 
-							{#if message?.error}
+							{#if message?.error && !isTransientReconnectError(message.error)}
 								<Error content={message?.error?.content ?? message.content} />
 							{/if}
 

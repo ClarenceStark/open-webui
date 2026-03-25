@@ -155,6 +155,43 @@ logging.basicConfig(stream=sys.stdout, level=GLOBAL_LOG_LEVEL)
 log = logging.getLogger(__name__)
 
 
+def extract_task_response_text(response: dict) -> str:
+    if not isinstance(response, dict):
+        return ""
+
+    choices = response.get("choices", [])
+    if len(choices) == 1:
+        response_message = choices[0].get("message", {}) or {}
+        content = response_message.get("content")
+        if isinstance(content, str) and content:
+            return content
+
+        reasoning_content = response_message.get("reasoning_content", "")
+        if isinstance(reasoning_content, str) and reasoning_content:
+            return reasoning_content
+
+    output_items = response.get("output", [])
+    if isinstance(output_items, list):
+        collected_parts = []
+        for item in output_items:
+            if not isinstance(item, dict) or item.get("type") != "message":
+                continue
+
+            for part in item.get("content", []) or []:
+                if not isinstance(part, dict):
+                    continue
+
+                if part.get("type") in ("output_text", "text"):
+                    text = part.get("text", "")
+                    if isinstance(text, str) and text:
+                        collected_parts.append(text)
+
+        if collected_parts:
+            return "".join(collected_parts)
+
+    return ""
+
+
 DEFAULT_REASONING_TAGS = [
     ("<think>", "</think>"),
     ("<thinking>", "</thinking>"),
@@ -4507,14 +4544,7 @@ async def background_tasks_handler(ctx):
                 )
 
                 if res and isinstance(res, dict):
-                    if len(res.get("choices", [])) == 1:
-                        response_message = res.get("choices", [])[0].get("message", {})
-
-                        follow_ups_string = response_message.get(
-                            "content"
-                        ) or response_message.get("reasoning_content", "")
-                    else:
-                        follow_ups_string = ""
+                    follow_ups_string = extract_task_response_text(res)
 
                     follow_ups_string = follow_ups_string[
                         follow_ups_string.find("{") : follow_ups_string.rfind("}") + 1
@@ -4564,20 +4594,10 @@ async def background_tasks_handler(ctx):
                         )
 
                         if res and isinstance(res, dict):
-                            if len(res.get("choices", [])) == 1:
-                                response_message = res.get("choices", [])[0].get(
-                                    "message", {}
-                                )
-
-                                title_string = (
-                                    response_message.get("content")
-                                    or response_message.get(
-                                        "reasoning_content",
-                                    )
-                                    or message.get("content", user_message)
-                                )
-                            else:
-                                title_string = ""
+                            title_string = (
+                                extract_task_response_text(res)
+                                or message.get("content", user_message)
+                            )
 
                             title_string = title_string[
                                 title_string.find("{") : title_string.rfind("}") + 1
@@ -4626,16 +4646,7 @@ async def background_tasks_handler(ctx):
                     )
 
                     if res and isinstance(res, dict):
-                        if len(res.get("choices", [])) == 1:
-                            response_message = res.get("choices", [])[0].get(
-                                "message", {}
-                            )
-
-                            tags_string = response_message.get(
-                                "content"
-                            ) or response_message.get("reasoning_content", "")
-                        else:
-                            tags_string = ""
+                        tags_string = extract_task_response_text(res)
 
                         tags_string = tags_string[
                             tags_string.find("{") : tags_string.rfind("}") + 1

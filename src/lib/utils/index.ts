@@ -1138,6 +1138,81 @@ export const getMessageContentParts = (content: string, splitOn: string = 'punct
 	return messageContentParts;
 };
 
+const DEFAULT_AUTO_CHAT_TITLE_MAX_LENGTH = 48;
+
+const getTextFromMessageContent = (content: unknown): string => {
+	if (typeof content === 'string') {
+		return content;
+	}
+
+	if (Array.isArray(content)) {
+		return content
+			.map((part) => {
+				if (typeof part === 'string') {
+					return part;
+				}
+
+				if (part && typeof part === 'object') {
+					if (typeof part.text === 'string') {
+						return part.text;
+					}
+
+					if (typeof part.content === 'string') {
+						return part.content;
+					}
+				}
+
+				return '';
+			})
+			.filter(Boolean)
+			.join('\n');
+	}
+
+	return '';
+};
+
+const truncateChatTitle = (title: string, maxLength: number): string => {
+	if (title.length <= maxLength) {
+		return title;
+	}
+
+	const slice = title.slice(0, maxLength).trimEnd();
+	const breakpoint = Math.max(slice.lastIndexOf(' '), slice.lastIndexOf('，'), slice.lastIndexOf('。'));
+
+	if (breakpoint >= Math.floor(maxLength * 0.6)) {
+		return `${slice.slice(0, breakpoint).trimEnd()}...`;
+	}
+
+	return `${slice}...`;
+};
+
+export const getAutoChatTitle = (
+	messages: Array<{ role?: string; content?: unknown }> = [],
+	fallback = 'New Chat',
+	maxLength = DEFAULT_AUTO_CHAT_TITLE_MAX_LENGTH
+) => {
+	const firstUserMessage = messages.find((message) => message?.role === 'user');
+	if (!firstUserMessage) {
+		return fallback;
+	}
+
+	const normalized = cleanText(getTextFromMessageContent(firstUserMessage.content))
+		.replace(/<[^>]+>/g, ' ')
+		.replace(/\s+/g, ' ')
+		.trim();
+
+	if (!normalized) {
+		return fallback;
+	}
+
+	const preferredSegment = normalized
+		.split(/[\n\r]+/)
+		.map((segment) => segment.trim())
+		.find(Boolean);
+
+	return truncateChatTitle(preferredSegment || normalized, maxLength);
+};
+
 export const blobToFile = (blob, fileName) => {
 	// Create a new File object from the Blob
 	const file = new File([blob], fileName, { type: blob.type });
