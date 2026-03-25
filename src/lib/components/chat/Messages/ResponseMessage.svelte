@@ -538,6 +538,17 @@
 		return finalOutputFiles.length > 0 ? finalOutputFiles : files;
 	};
 
+	const contentHasLinksForAllFiles = (content, files) => {
+		if (typeof content !== 'string' || !Array.isArray(files) || files.length === 0) {
+			return false;
+		}
+
+		return files.every((file) => {
+			const url = file?.url ?? '';
+			return url && content.includes(`](${url})`);
+		});
+	};
+
 	export let siblings;
 
 	export let setInputText: Function = () => {};
@@ -858,7 +869,9 @@
 		}
 	}
 	$: displayedFiles = getDisplayedFiles(message?.files ?? []);
-	$: shouldShowFiles = finalOutputContentReady && displayedFiles.length > 0;
+	$: shouldHideFilesBecauseLinked = contentHasLinksForAllFiles(targetContent ?? '', displayedFiles);
+	$: shouldShowFiles =
+		finalOutputContentReady && displayedFiles.length > 0 && !shouldHideFilesBecauseLinked;
 	$: shouldShowMessageActions = finalOutputRevealed && finalOutputPresentationReady;
 
 	const getPlaybackCharsPerSecond = (queuedChars: number, done: boolean) => {

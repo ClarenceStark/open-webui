@@ -2058,6 +2058,14 @@ async def upload_artifact_to_chat(
         )
         guessed_type = content.split(";", 1)[0].replace("data:", "", 1)
         content_type = content_type or guessed_type
+    elif path and os.path.isabs(path) and os.path.isfile(path):
+        with open(path, "rb") as handle:
+            file_bytes = handle.read()
+        content_type = (
+            content_type
+            or mimetypes.guess_type(filename)[0]
+            or "application/octet-stream"
+        )
     elif path and tool_info and tool_info.get("server", {}).get("url"):
         server = tool_info.get("server", {})
         base_url = server.get("url", "").rstrip("/")
