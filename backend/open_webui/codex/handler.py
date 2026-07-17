@@ -1008,7 +1008,11 @@ async def codex_chat_completion(
     if chat is not None:
         codex_thread_id = (chat.chat or {}).get("codex_thread_id")
 
-    session = await manager.get_or_create(chat_id, codex_thread_id)
+    session = await manager.get_or_create(
+        chat_id,
+        codex_thread_id,
+        user_email=getattr(user, "email", None),
+    )
     session.last_active = time.monotonic()
 
     if session.thread_id != codex_thread_id:

@@ -14,9 +14,11 @@ from codex_app_server.client import AppServerConfig
 from open_webui.codex.config import (
     CODEX_BIN_PATH,
     CODEX_SESSION_IDLE_TIMEOUT,
+    get_codex_app_server_config_overrides,
     get_codex_app_server_env,
     get_workspace_path,
 )
+from open_webui.codex.instructions import build_codex_developer_instructions
 
 log = logging.getLogger(__name__)
 
@@ -62,9 +64,7 @@ def _normalize_answer(question: dict[str, Any], response: Any) -> list[str]:
         return [options[0]["label"]] if options else []
 
     parts = [
-        part.strip()
-        for part in re.split(r"[\n,]+", raw_text)
-        if part and part.strip()
+        part.strip() for part in re.split(r"[\n,]+", raw_text) if part and part.strip()
     ]
 
     if not options:
@@ -200,7 +200,9 @@ class CodexInteractionBridge:
             questions = []
 
         if not self._has_active_event_caller():
-            log.warning("Codex request_user_input received without an active websocket caller")
+            log.warning(
+                "Codex request_user_input received without an active websocket caller"
+            )
             return {
                 "answers": {
                     str(question.get("id", f"question_{index}")): {
@@ -244,6 +246,8 @@ class CodexSession:
     thread_id: str
     chat_id: str
     workspace: Path
+    codex_env: dict[str, str]
+    codex_config_overrides: tuple[str, ...]
     request_bridge: CodexInteractionBridge
     last_active: float = field(default_factory=time.monotonic)
     current_turn: AsyncTurnHandle | None = None
@@ -261,6 +265,7 @@ class CodexSessionManager:
         self,
         chat_id: str,
         codex_thread_id: str | None = None,
+        user_email: str | None = None,
     ) -> CodexSession:
         async with self._lock:
             existing = self._sessions.get(chat_id)
@@ -270,13 +275,18 @@ class CodexSessionManager:
 
             workspace = get_workspace_path(chat_id)
             workspace.mkdir(parents=True, exist_ok=True)
+            codex_env = get_codex_app_server_env(user_email=user_email)
+            codex_config_overrides = get_codex_app_server_config_overrides(
+                user_email=user_email
+            )
 
             bridge = CodexInteractionBridge()
             codex = AsyncCodex(
                 config=AppServerConfig(
                     codex_bin=CODEX_BIN_PATH,
                     cwd=str(workspace),
-                    env=get_codex_app_server_env(),
+                    env=codex_env,
+                    config_overrides=codex_config_overrides,
                 )
             )
             codex._client._sync._approval_handler = bridge.handle_request
@@ -297,6 +307,8 @@ class CodexSessionManager:
                 thread_id=thread.id,
                 chat_id=chat_id,
                 workspace=workspace,
+                codex_env=codex_env,
+                codex_config_overrides=codex_config_overrides,
                 request_bridge=bridge,
             )
             self._sessions[chat_id] = session
@@ -330,7 +342,8 @@ class CodexSessionManager:
             config=AppServerConfig(
                 codex_bin=CODEX_BIN_PATH,
                 cwd=str(session.workspace),
-                env=get_codex_app_server_env(),
+                env=session.codex_env,
+                config_overrides=session.codex_config_overrides,
             )
         )
         try:
@@ -378,12 +391,16 @@ class CodexSessionManager:
     ) -> AsyncThread:
         kwargs = {
             "cwd": str(workspace),
+            "developer_instructions": build_codex_developer_instructions(workspace),
         }
 
         if codex_thread_id:
             try:
                 return await codex.thread_resume(codex_thread_id, **kwargs)
             except Exception:
-                log.exception("Failed to resume Codex thread %s; starting a new one", codex_thread_id)
+                log.exception(
+                    "Failed to resume Codex thread %s; starting a new one",
+                    codex_thread_id,
+                )
 
         return await codex.thread_start(**kwargs)
