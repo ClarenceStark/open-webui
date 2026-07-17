@@ -1,5 +1,6 @@
 from open_webui.utils.task import prompt_template, prompt_variables_template
 from open_webui.utils.misc import (
+    add_api_key_non_disclosure_system_message,
     deep_update,
     add_or_update_system_message,
     replace_system_message_content,
@@ -38,6 +39,10 @@ def apply_system_prompt_to_body(
         form_data["messages"] = add_or_update_system_message(
             system, form_data.get("messages", [])
         )
+
+    form_data["messages"] = add_api_key_non_disclosure_system_message(
+        form_data.get("messages", [])
+    )
 
     return form_data
 
