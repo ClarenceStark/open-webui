@@ -17,6 +17,11 @@ const config = {
 			assets: 'build',
 			fallback: 'index.html'
 		}),
+		// Keep building /service-worker.js so previously installed workers can update to the
+		// cleanup worker, but do not register it for new visitors.
+		serviceWorker: {
+			register: false
+		},
 		// poll for new version name every 60 seconds (to trigger reload mechanic in +layout.svelte)
 		version: {
 			name: (() => {

@@ -2,12 +2,7 @@
 <html lang="en">
 	<head>
 		<meta charset="utf-8" />
-		<link
-			rel="icon"
-			type="image/svg+xml"
-			href="/openai-mark.svg"
-			crossorigin="use-credentials"
-		/>
+		<link rel="icon" type="image/svg+xml" href="/openai-mark.svg" crossorigin="use-credentials" />
 		<link
 			rel="icon"
 			type="image/png"
@@ -36,6 +31,86 @@
 
 		<script src="/static/loader.js" defer crossorigin="use-credentials"></script>
 		<link rel="stylesheet" href="/static/custom.css" crossorigin="use-credentials" />
+
+		<script>
+			// Recover browsers that are still controlled by the legacy app-shell service worker.
+			// Keep this inline so it runs before SvelteKit loads any potentially stale chunks.
+			(() => {
+				const recoveryKey = 'open-webui-boot-recovery-v1';
+				const legacyCachePrefix = 'open-webui-app-';
+				const maxAutomaticRecoveries = 2;
+
+				const recoveryCount = () => Number.parseInt(sessionStorage.getItem(recoveryKey) ?? '0', 10);
+
+				const clearLegacyAppShell = async () => {
+					if ('serviceWorker' in navigator) {
+						const registrations = await navigator.serviceWorker.getRegistrations();
+						await Promise.all(
+							registrations.map((registration) => registration.update().catch(() => undefined))
+						);
+					}
+
+					if ('caches' in window) {
+						const keys = await caches.keys();
+						await Promise.all(
+							keys
+								.filter((key) => key.startsWith(legacyCachePrefix))
+								.map((key) => caches.delete(key).catch(() => false))
+						);
+					}
+				};
+
+				const recoverAndReload = async () => {
+					const attempts = recoveryCount();
+					sessionStorage.setItem(recoveryKey, String(attempts + 1));
+
+					try {
+						await clearLegacyAppShell();
+					} catch (error) {
+						console.warn('Failed to clear the legacy app shell:', error);
+					}
+
+					location.reload();
+				};
+
+				window.__openWebUIRecover = recoverAndReload;
+
+				if (
+					'serviceWorker' in navigator &&
+					navigator.serviceWorker.controller &&
+					recoveryCount() < maxAutomaticRecoveries
+				) {
+					recoverAndReload();
+				}
+
+				document.addEventListener('DOMContentLoaded', () => {
+					window.setTimeout(() => {
+						const splash = document.getElementById('splash-screen');
+						if (!splash) {
+							sessionStorage.removeItem(recoveryKey);
+							return;
+						}
+
+						if (recoveryCount() < maxAutomaticRecoveries) {
+							recoverAndReload();
+							return;
+						}
+
+						const status = document.createElement('div');
+						status.setAttribute('role', 'alert');
+						status.style.cssText =
+							'position:absolute;left:50%;top:58%;transform:translateX(-50%);text-align:center;font:14px system-ui,sans-serif;color:#737373;width:min(28rem,calc(100% - 3rem));';
+						status.innerHTML =
+							'<p style="margin:0 0 12px">页面加载未完成，请重试。</p><button type="button" style="border:0;border-radius:9999px;padding:10px 18px;background:#171717;color:#fff;font:inherit;cursor:pointer">清理缓存并重试</button>';
+						status.querySelector('button')?.addEventListener('click', () => {
+							sessionStorage.removeItem(recoveryKey);
+							recoverAndReload();
+						});
+						splash.append(status);
+					}, 15000);
+				});
+			})();
+		</script>
 
 		<script>
 			function resizeIframe(obj) {

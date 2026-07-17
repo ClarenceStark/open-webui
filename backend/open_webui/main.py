@@ -575,17 +575,27 @@ log = logging.getLogger(__name__)
 
 class SPAStaticFiles(StaticFiles):
     async def get_response(self, path: str, scope):
+        served_path = path
         try:
-            return await super().get_response(path, scope)
+            response = await super().get_response(path, scope)
         except (HTTPException, StarletteHTTPException) as ex:
             if ex.status_code == 404:
                 if path.endswith(".js"):
                     # Return 404 for javascript files
                     raise ex
                 else:
-                    return await super().get_response("index.html", scope)
+                    served_path = "index.html"
+                    response = await super().get_response(served_path, scope)
             else:
                 raise ex
+
+        if served_path == "service-worker.js":
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            response.headers["Service-Worker-Allowed"] = "/"
+        elif served_path in {"", ".", "index.html"}:
+            response.headers["Cache-Control"] = "no-cache, must-revalidate"
+
+        return response
 
 
 if LOG_FORMAT != "json":

@@ -111,8 +111,6 @@
 	let syncStatsEventData = null;
 
 	let heartbeatInterval = null;
-	let deferredInstallPrompt = null;
-	let showInstallApp = false;
 	let appShellEnabled = false;
 
 	const BREAKPOINT = 768;
@@ -779,19 +777,10 @@
 			}
 		};
 
-		const beforeInstallPromptHandler = (event) => {
-			event.preventDefault();
-			deferredInstallPrompt = event;
-			showInstallApp = !isStandaloneApp();
-		};
-
 		const appInstalledHandler = () => {
-			deferredInstallPrompt = null;
-			showInstallApp = false;
 			syncAppMode();
 		};
 
-		window.addEventListener('beforeinstallprompt', beforeInstallPromptHandler);
 		window.addEventListener('appinstalled', appInstalledHandler);
 		syncAppMode();
 
@@ -989,7 +978,6 @@
 
 		return () => {
 			window.removeEventListener('resize', onResize);
-			window.removeEventListener('beforeinstallprompt', beforeInstallPromptHandler);
 			window.removeEventListener('appinstalled', appInstalledHandler);
 			window.removeEventListener('message', windowMessageEventHandler);
 			document.removeEventListener('touchstart', touchstartHandler);
@@ -1017,26 +1005,6 @@
 		crossorigin="use-credentials"
 	/>
 </svelte:head>
-
-{#if showInstallApp && !$isApp}
-	<button
-		class="fixed z-40 right-4 bottom-4 md:right-6 md:bottom-6 rounded-full px-4 py-2.5 text-sm font-medium bg-gray-900 text-white shadow-xl hover:bg-black transition dark:bg-white dark:text-black dark:hover:bg-gray-200"
-		on:click={async () => {
-			if (!deferredInstallPrompt) {
-				return;
-			}
-
-			await deferredInstallPrompt.prompt();
-			const { outcome } = await deferredInstallPrompt.userChoice;
-			console.log('PWA install prompt outcome', outcome);
-
-			deferredInstallPrompt = null;
-			showInstallApp = false;
-		}}
-	>
-		Install App
-	</button>
-{/if}
 
 {#if showRefresh}
 	<div class=" py-5">
