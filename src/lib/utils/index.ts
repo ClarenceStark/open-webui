@@ -962,7 +962,7 @@ const collectReasoningDetails = (content: string) => {
 				.replace(/<summary>[\s\S]*?<\/summary>/i, '')
 				.replace(/^(\s|\n)+|(\s|\n)+$/g, '')
 		)
-			.filter(Boolean);
+		.filter(Boolean);
 
 	return {
 		matches,
@@ -1177,7 +1177,11 @@ const truncateChatTitle = (title: string, maxLength: number): string => {
 	}
 
 	const slice = title.slice(0, maxLength).trimEnd();
-	const breakpoint = Math.max(slice.lastIndexOf(' '), slice.lastIndexOf('，'), slice.lastIndexOf('。'));
+	const breakpoint = Math.max(
+		slice.lastIndexOf(' '),
+		slice.lastIndexOf('，'),
+		slice.lastIndexOf('。')
+	);
 
 	if (breakpoint >= Math.floor(maxLength * 0.6)) {
 		return `${slice.slice(0, breakpoint).trimEnd()}...`;
@@ -1910,7 +1914,7 @@ export const getCodeBlockContents = (content: string): object => {
 
 	const codeBlockContents = content.match(/```[\s\S]*?```/g);
 
-	let codeBlocks = [];
+	const codeBlocks = [];
 
 	let htmlContent = '';
 	let cssContent = '';
