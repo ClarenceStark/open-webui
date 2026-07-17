@@ -19,10 +19,6 @@ export const getModelDisplayName = (
 	const base = (name ?? id ?? fallback).trim();
 	const normalized = (base || fallback).toLowerCase();
 
-	if (normalized === 'gpt-5.4-pro') {
-		return 'GPT-5.4-Pro';
-	}
-
 	return (base || fallback).toUpperCase();
 };
 
@@ -35,17 +31,10 @@ const getKnownOpenAIModelDescription = (
 ) => {
 	const modelId = (model?.id ?? model?.name ?? '').toLowerCase();
 
-	if (modelId === 'gpt-5.4') {
+	if (modelId === 'gpt-5.5') {
 		return translateLabel(
 			translate,
 			'Our most capable and efficient frontier model for professional work.'
-		);
-	}
-
-	if (modelId === 'gpt-5.4-pro') {
-		return translateLabel(
-			translate,
-			'Our most intelligent model for research level questions and extremely complex tasks.'
 		);
 	}
 
@@ -93,13 +82,10 @@ export const getModelShortDescription = (
 
 export const shouldUseOpenAILogo = (model?: Partial<Model> & Record<string, any>) => {
 	const modelId = (model?.id ?? model?.name ?? '').toLowerCase();
-	return model?.owned_by === 'openai' || modelId === 'gpt-5.4' || modelId === 'gpt-5.4-pro';
+	return model?.owned_by === 'openai' || modelId === 'gpt-5.5';
 };
 
-export const getModelAvatarSrc = (
-	model?: Partial<Model> & Record<string, any>,
-	lang = 'en'
-) => {
+export const getModelAvatarSrc = (model?: Partial<Model> & Record<string, any>, lang = 'en') => {
 	if (shouldUseOpenAILogo(model)) {
 		return `${WEBUI_BASE_URL}/openai-mark.svg`;
 	}

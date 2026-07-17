@@ -1247,7 +1247,7 @@ DEFAULT_LOCALE = PersistentConfig(
 )
 
 DEFAULT_MODELS = PersistentConfig(
-    "DEFAULT_MODELS", "ui.default_models", os.environ.get("DEFAULT_MODELS", "gpt-5.4")
+    "DEFAULT_MODELS", "ui.default_models", os.environ.get("DEFAULT_MODELS", "gpt-5.5")
 )
 
 DEFAULT_PINNED_MODELS = PersistentConfig(

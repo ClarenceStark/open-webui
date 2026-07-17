@@ -1710,9 +1710,9 @@ async def chat_completion(
 
     model_id = form_data.get("model", None)
     resolved_model_id = (
-        "gpt-5.4"
+        "gpt-5.5"
         if isinstance(model_id, str)
-        and (model_id == "gpt-5.4" or model_id.startswith("codex/"))
+        and (model_id in {"gpt-5.4", "gpt-5.5"} or model_id.startswith("codex/"))
         else model_id
     )
     model_item = form_data.pop("model_item", {})
@@ -1874,7 +1874,8 @@ async def chat_completion(
         try:
             current_model_id = form_data.get("model", "")
             if isinstance(current_model_id, str) and (
-                current_model_id == "gpt-5.4" or current_model_id.startswith("codex/")
+                current_model_id in {"gpt-5.4", "gpt-5.5"}
+                or current_model_id.startswith("codex/")
             ):
                 from open_webui.codex.handler import codex_chat_completion
 

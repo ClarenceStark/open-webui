@@ -44,9 +44,11 @@ def _matches_model_alias(model_id: str | None, canonical_id: str) -> bool:
     if model_id == canonical_id:
         return True
 
-    return model_id.endswith(f".{canonical_id}") or model_id.endswith(
-        f"/{canonical_id}"
-    ) or model_id.endswith(f":{canonical_id}")
+    return (
+        model_id.endswith(f".{canonical_id}")
+        or model_id.endswith(f"/{canonical_id}")
+        or model_id.endswith(f":{canonical_id}")
+    )
 
 
 def apply_implicit_model_param_defaults(models: list[dict]) -> None:
@@ -58,7 +60,7 @@ def apply_implicit_model_param_defaults(models: list[dict]) -> None:
     per-model params that already exist.
     """
     for model in models:
-        if not _matches_model_alias(model.get("id"), "gpt-5.4"):
+        if not _matches_model_alias(model.get("id"), "gpt-5.5"):
             continue
 
         info = model.setdefault("info", {})

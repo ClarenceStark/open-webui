@@ -5,7 +5,9 @@ from open_webui.utils import models as models_utils
 
 def test_get_filtered_models_keeps_provider_models_without_db_record(monkeypatch):
     monkeypatch.setattr(models_utils, "BYPASS_MODEL_ACCESS_CONTROL", False)
-    monkeypatch.setattr(models_utils.Models, "get_models_by_ids", lambda ids, db=None: [])
+    monkeypatch.setattr(
+        models_utils.Models, "get_models_by_ids", lambda ids, db=None: []
+    )
     monkeypatch.setattr(
         models_utils.Groups, "get_groups_by_member_id", lambda user_id, db=None: []
     )
@@ -17,18 +19,20 @@ def test_get_filtered_models_keeps_provider_models_without_db_record(monkeypatch
 
     user = SimpleNamespace(id="user-1", role="user")
     models = [
-        {"id": "gpt-5.4", "info": {"meta": {}}},
-        {"id": "gpt-5.4-pro", "info": {"meta": {}}},
+        {"id": "gpt-5.5", "info": {"meta": {}}},
+        {"id": "provider-model", "info": {"meta": {}}},
     ]
 
     assert models_utils.get_filtered_models(models, user) == models
 
 
 def test_check_model_access_allows_provider_models_without_db_record(monkeypatch):
-    monkeypatch.setattr(models_utils.Models, "get_model_by_id", lambda model_id, db=None: None)
+    monkeypatch.setattr(
+        models_utils.Models, "get_model_by_id", lambda model_id, db=None: None
+    )
 
     user = SimpleNamespace(id="user-1", role="user")
-    model = {"id": "gpt-5.4", "info": {"meta": {}}}
+    model = {"id": "gpt-5.5", "info": {"meta": {}}}
 
     assert models_utils.check_model_access(user, model) is None
 

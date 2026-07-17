@@ -2977,7 +2977,7 @@
 			params?.reasoning_effort ??
 			$settings?.params?.reasoning_effort ??
 			model?.info?.params?.reasoning_effort ??
-			(matchesModelAlias(model?.id, 'gpt-5.4') ? 'high' : undefined)
+			(matchesModelAlias(model?.id, 'gpt-5.5') ? 'high' : undefined)
 		);
 	};
 
