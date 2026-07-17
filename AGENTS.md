@@ -10,6 +10,26 @@ Use `npm install` for frontend dependencies and `/Users/clarencestark/code/open-
 
 Default local startup is Codex-only: start just the Open WebUI backend with `cd backend && /Users/clarencestark/code/open-webui/.venv/bin/python -m uvicorn open_webui.main:app --host 127.0.0.1 --port 8080 --workers 1`. This repo's built-in Codex backend runs through the backend process and local Codex app server integration, so sandbox worker and Docker are not required for normal Codex usage.
 
+For persistent local hosting on this macOS machine, do not default to `pm2`. The current persistent setup uses the user LaunchAgent `com.clarencestark.open-webui` at `/Users/clarencestark/Library/LaunchAgents/com.clarencestark.open-webui.plist`, which runs `/Users/clarencestark/code/open-webui/ops/open-webui-launchd.sh`. That wrapper invokes `/Users/clarencestark/code/open-webui/.venv/bin/python -m open_webui serve --host 127.0.0.1 --port 8080` from `/Users/clarencestark/code/open-webui/backend` with `UVICORN_WORKERS=4`.
+
+Important: `launchd` does not inherit shell exports from `~/.zshrc` or terminal sessions. If the backend needs secrets such as `AZURE_OPENAI_API_KEY_1` or `OPENAI_API_KEY_PLAIN`, start the LaunchAgent through the wrapper script `/Users/clarencestark/code/open-webui/ops/open-webui-launchd.sh`, which invokes `/bin/zsh -lic` before the repository startup script so the exported shell environment is available to the backend process. If the app reports missing environment variables after reboot or relaunch, first verify the LaunchAgent still points to that wrapper script rather than directly launching Python.
+
+For public access behind Cloudflare Tunnel, do not use a foreground `uvicorn --workers 1` process as the steady-state runtime. Keep the single-worker command for local debugging only. The public tunnel should use the persistent LaunchAgent wrapper with `UVICORN_WORKERS=4` to reduce the chance that one blocked request stalls the entire site and triggers Cloudflare `524` host timeouts.
+
+Use these commands for persistent-service operations:
+
+- `launchctl print gui/$(id -u)/com.clarencestark.open-webui`
+- `launchctl kickstart -k gui/$(id -u)/com.clarencestark.open-webui`
+- `launchctl bootout gui/$(id -u)/com.clarencestark.open-webui`
+- `launchctl bootstrap gui/$(id -u) /Users/clarencestark/Library/LaunchAgents/com.clarencestark.open-webui.plist`
+- `tail -f /Users/clarencestark/Library/Logs/open-webui/stdout.log`
+- `tail -f /Users/clarencestark/Library/Logs/open-webui/stderr.log`
+- `curl http://127.0.0.1:8080/health`
+
+This LaunchAgent starts automatically after the user logs in and keeps the service alive if it exits. Unless the task explicitly requires LAN/public exposure, keep the listener on `127.0.0.1`. If true boot-after-restart without user login is required, that is a separate system-level `LaunchDaemon` task and requires `sudo`.
+
+Unless a task explicitly states otherwise, discussions about features, bugs, behavior, architecture, or validation in this repository should default to the branch/path where Codex app server is the backend. Do not default to the legacy non-Codex chat backend when interpreting user reports or implementing fixes.
+
 Only start the sandbox worker with `docker compose -f docker-compose.sandbox.yaml up -d --build` when the task explicitly requires Open WebUI's native terminal/file tools on `127.0.0.1:8765`. Unless sandbox or Docker is explicitly requested, do not start them.
 
 Whenever a task changes backend code and validation depends on that new backend code taking effect, proactively restart the backend before validating. Do not leave backend restart as an implicit/manual follow-up step.
