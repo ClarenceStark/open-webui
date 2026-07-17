@@ -29,6 +29,7 @@
 	import Knowledge from './InputMenu/Knowledge.svelte';
 	import AttachWebpageModal from './AttachWebpageModal.svelte';
 	import GlobeAlt from '$lib/components/icons/GlobeAlt.svelte';
+	import Photo from '$lib/components/icons/Photo.svelte';
 
 	const i18n = getContext('i18n');
 
@@ -38,6 +39,8 @@
 	export let fileUploadCapableModels: string[] = [];
 	export let showWebSearchButton = false;
 	export let webSearchEnabled = false;
+	export let showImageGenerationButton = false;
+	export let imageGenerationEnabled = false;
 
 	export let screenCaptureHandler: Function;
 	export let uploadFilesHandler: Function;
@@ -229,6 +232,29 @@
 
 								<div class="shrink-0">
 									<Switch state={webSearchEnabled} />
+								</div>
+							</button>
+						</Tooltip>
+					{/if}
+
+					{#if showImageGenerationButton}
+						<Tooltip content={$i18n.t('Create image')} className="w-full">
+							<button
+								type="button"
+								class="flex w-full justify-between gap-2 items-center px-3 py-1.5 text-sm cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800 rounded-xl"
+								aria-label={$i18n.t('Toggle image generation')}
+								aria-pressed={imageGenerationEnabled}
+								on:click={() => {
+									imageGenerationEnabled = !imageGenerationEnabled;
+								}}
+							>
+								<div class="flex flex-1 gap-2 items-center truncate">
+									<Photo className="size-4" strokeWidth="1.5" />
+									<div class="line-clamp-1">{$i18n.t('Create Image')}</div>
+								</div>
+
+								<div class="shrink-0">
+									<Switch state={imageGenerationEnabled} />
 								</div>
 							</button>
 						</Tooltip>

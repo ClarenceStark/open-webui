@@ -574,19 +574,53 @@
 			return [];
 		}
 
-		const finalOutputFiles = files.filter((file) => file?.is_final_output === true);
-		return finalOutputFiles.length > 0 ? finalOutputFiles : files;
+		const uniqueFiles = [];
+		const indexByKey = new Map();
+
+		for (const file of files) {
+			const key =
+				file?.id ??
+				file?.url ??
+				`${file?.name ?? ''}|${file?.content_type ?? ''}|${file?.type ?? ''}`;
+			const existingIndex = indexByKey.get(key);
+
+			if (existingIndex === undefined) {
+				indexByKey.set(key, uniqueFiles.length);
+				uniqueFiles.push(file);
+				continue;
+			}
+
+			if (file?.is_final_output === true && uniqueFiles[existingIndex]?.is_final_output !== true) {
+				uniqueFiles[existingIndex] = {
+					...uniqueFiles[existingIndex],
+					...file,
+					is_final_output: true
+				};
+			}
+		}
+
+		const finalOutputFiles = uniqueFiles.filter((file) => file?.is_final_output === true);
+		return finalOutputFiles.length > 0 ? finalOutputFiles : uniqueFiles;
 	};
 
-	const contentHasLinksForAllFiles = (content, files) => {
-		if (typeof content !== 'string' || !Array.isArray(files) || files.length === 0) {
+	const isImageFile = (file) =>
+		file?.type === 'image' || (file?.content_type ?? '').startsWith('image/');
+
+	const contentHasLinkForFile = (content, file) => {
+		if (typeof content !== 'string') {
 			return false;
 		}
 
-		return files.every((file) => {
-			const url = file?.url ?? '';
-			return url && content.includes(`](${url})`);
-		});
+		const url = file?.url ?? '';
+		return Boolean(url && content.includes(`](${url})`));
+	};
+
+	const getVisibleDisplayedFiles = (content, files) => {
+		if (!Array.isArray(files) || files.length === 0) {
+			return [];
+		}
+
+		return files.filter((file) => isImageFile(file) || !contentHasLinkForFile(content, file));
 	};
 
 	export let siblings;
@@ -735,8 +769,7 @@
 		(item) => item && item.hidden !== true && !STATUS_HISTORY_HIDDEN_ACTIONS.has(item.action)
 	);
 	$: transientReconnectState =
-		message?.reconnecting ??
-		(isTransientReconnectError(message?.error) ? message.error : null);
+		message?.reconnecting ?? (isTransientReconnectError(message?.error) ? message.error : null);
 	$: parsedToolCallDetails =
 		typeof targetContent === 'string' ? extractToolCallDetails(targetContent) : [];
 	$: latestStatusItem = visibleStatusHistory.at(-1) ?? null;
@@ -766,9 +799,7 @@
 
 				const startedAt = normalizeStartedAtSeconds(item?.started_at ?? null);
 				const duration =
-					typeof item?.duration === 'number' &&
-					Number.isFinite(item.duration) &&
-					item.duration >= 0
+					typeof item?.duration === 'number' && Number.isFinite(item.duration) && item.duration >= 0
 						? Math.floor(item.duration)
 						: null;
 
@@ -821,8 +852,8 @@
 		? isTransientReconnectActive
 			? getCodexConnectingLabel()
 			: shouldAnimateUnifiedIndicator
-			? getCodexWorkingLabel()
-			: getCodexCompletedLabel()
+				? getCodexWorkingLabel()
+				: getCodexCompletedLabel()
 		: null;
 	let indicatorWasEverAnimated = false;
 	let indicatorFrozeAtSeconds: number | null = null;
@@ -848,7 +879,7 @@
 		: !hasAssistantResponseStarted;
 	$: workflowIndicatorText = isTransientReconnectActive
 		? getCodexConnectingLabel()
-		: codexIndicatorText ?? unifiedIndicatorText;
+		: (codexIndicatorText ?? unifiedIndicatorText);
 	$: shouldShowUnifiedIndicator =
 		(!message.error || isTransientReconnectError(message.error)) &&
 		(isTransientReconnectActive ||
@@ -921,9 +952,8 @@
 		}
 	}
 	$: displayedFiles = getDisplayedFiles(message?.files ?? []);
-	$: shouldHideFilesBecauseLinked = contentHasLinksForAllFiles(targetContent ?? '', displayedFiles);
-	$: shouldShowFiles =
-		finalOutputContentReady && displayedFiles.length > 0 && !shouldHideFilesBecauseLinked;
+	$: visibleDisplayedFiles = getVisibleDisplayedFiles(targetContent ?? '', displayedFiles);
+	$: shouldShowFiles = finalOutputContentReady && visibleDisplayedFiles.length > 0;
 	$: shouldShowMessageActions = finalOutputRevealed && finalOutputPresentationReady;
 
 	const getPlaybackCharsPerSecond = (queuedChars: number, done: boolean) => {
@@ -1786,9 +1816,9 @@
 									dir={$settings?.chatDirection ?? 'auto'}
 									in:fade={{ duration: 180 }}
 								>
-									{#each displayedFiles as file}
+									{#each visibleDisplayedFiles as file}
 										<div>
-											{#if file.type === 'image' || (file?.content_type ?? '').startsWith('image/')}
+											{#if isImageFile(file)}
 												<Image src={file.url} alt={imageAltText} />
 											{:else}
 												<FileItem

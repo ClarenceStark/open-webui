@@ -492,6 +492,20 @@
 		return $user?.role === 'admin' || $user?.permissions?.features?.[feature];
 	};
 
+	const isCodexModelId = (modelId = '') =>
+		modelId === 'gpt-5.5' || modelId === 'gpt-5.4' || modelId.startsWith('codex/');
+
+	const selectedModelsAreCodex = () => {
+		const currentModels = atSelectedModel?.id ? [atSelectedModel.id] : selectedModels;
+		return currentModels.length > 0 && currentModels.every((modelId) => isCodexModelId(modelId));
+	};
+
+	const isCodexMessage = (message: any = {}) =>
+		selectedModelsAreCodex() ||
+		isCodexModelId(message?.model ?? '') ||
+		isCodexModelId(message?.selectedModelId ?? '') ||
+		(message?.statusHistory ?? []).some((item) => item?.action === 'codex');
+
 	const shouldEnableWebSearchByDefault = (model) => {
 		return (
 			!!model?.info?.meta?.capabilities?.['web_search'] &&
@@ -2920,8 +2934,9 @@
 			features = {
 				voice: $showCallOverlay,
 				image_generation:
-					$config?.features?.enable_image_generation &&
-					($user?.role === 'admin' || $user?.permissions?.features?.image_generation)
+					selectedModelsAreCodex() ||
+					($config?.features?.enable_image_generation &&
+						($user?.role === 'admin' || $user?.permissions?.features?.image_generation))
 						? imageGenerationEnabled
 						: false,
 				code_interpreter:

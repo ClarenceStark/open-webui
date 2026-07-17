@@ -208,6 +208,22 @@ def _build_workspace_attachment_prompt(
     return "\n".join(lines)
 
 
+def _build_codex_image_generation_prompt(workspace: Path) -> str:
+    output_dir = workspace / "outputs" / "image-generation"
+    skill_path = "/Users/clarencestark/.codex/skills/image-generation"
+    lines = [
+        "The user enabled Create Image for this Codex turn.",
+        f"Use only the local image-generation skill at: {skill_path}",
+        f"Read {skill_path}/SKILL.md before generating the image.",
+        "Use Azure OpenAI image generation through that skill rather than a placeholder, mock image, or the built-in image_gen tool.",
+        "Use quality=high for image generation and editing.",
+        f"Save the final generated image inside the current Codex workspace, preferably under: {output_dir}",
+        "When you answer, include the final local image path so Open WebUI can upload and render it inline.",
+        "Do not leave the result only as an external URL, and do not merely return a clickable path name without creating the image file.",
+    ]
+    return "\n".join(lines)
+
+
 def _iter_workspace_files(workspace: Path):
     for path in workspace.rglob("*"):
         if not path.is_file():
@@ -233,7 +249,10 @@ def _snapshot_workspace_files(workspace: Path) -> dict[str, tuple[int, int]]:
             stat = path.stat()
         except FileNotFoundError:
             continue
-        snapshot[path.relative_to(workspace).as_posix()] = (stat.st_mtime_ns, stat.st_size)
+        snapshot[path.relative_to(workspace).as_posix()] = (
+            stat.st_mtime_ns,
+            stat.st_size,
+        )
 
     return snapshot
 
@@ -290,9 +309,7 @@ def _extract_referenced_local_paths(content: str) -> set[str]:
     referenced: set[str] = set()
 
     for match in re.finditer(r"\[[^\]]+\]\((/[^)\s]+)\)", content):
-        href = match.group(1)
-        if href.startswith("/Users/") or href.startswith("/tmp/"):
-            referenced.add(_normalize_local_path(href))
+        referenced.add(_normalize_local_path(match.group(1)))
 
     for match in re.finditer(r"(?<!\()(/(?:Users|tmp)/[^\s)]+)", content):
         referenced.add(_normalize_local_path(match.group(1)))
@@ -375,12 +392,16 @@ async def _upload_codex_workspace_artifacts(
             uploaded_files.append(uploaded_artifact)
             uploaded_pairs.append((artifact, uploaded_artifact))
 
+    files_emitted_in_update = False
     if uploaded_pairs:
-        message = await asyncio.to_thread(
-            Chats.get_message_by_id_and_message_id,
-            metadata.get("chat_id"),
-            message_id,
-        ) or {}
+        message = (
+            await asyncio.to_thread(
+                Chats.get_message_by_id_and_message_id,
+                metadata.get("chat_id"),
+                message_id,
+            )
+            or {}
+        )
         content = message.get("content", "")
         referenced_local_paths = _extract_referenced_local_paths(content)
 
@@ -409,19 +430,24 @@ async def _upload_codex_workspace_artifacts(
             uploaded_files = [*final_files, *fallback_files]
 
         if rewritten_content != content or final_files:
+            files_emitted_in_update = bool(final_files)
             await _emit_to_message(
                 event_emitter,
                 message_id,
                 "chat:message:update",
                 {
                     "message": {
-                        **({"content": rewritten_content} if rewritten_content != content else {}),
+                        **(
+                            {"content": rewritten_content}
+                            if rewritten_content != content
+                            else {}
+                        ),
                         **({"files": uploaded_files} if final_files else {}),
                     }
                 },
             )
 
-    if uploaded_files:
+    if uploaded_files and not files_emitted_in_update:
         await _emit_to_message(
             event_emitter,
             message_id,
@@ -1050,6 +1076,11 @@ async def codex_chat_completion(
         ),
         user,
     )
+    if (metadata.get("features") or {}).get("image_generation"):
+        turn_input.insert(
+            0,
+            TextInput(_build_codex_image_generation_prompt(session.workspace)),
+        )
     message_state = {
         "root_message_id": message_id,
         "root_message": root_message,

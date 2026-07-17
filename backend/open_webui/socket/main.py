@@ -57,6 +57,37 @@ log = logging.getLogger(__name__)
 
 REDIS = None
 
+
+def _file_event_dedupe_key(item):
+    if not isinstance(item, dict):
+        return str(item)
+
+    return str(
+        item.get("id")
+        or item.get("url")
+        or f"{item.get('name', '')}|{item.get('content_type', '')}|{item.get('type', '')}"
+    )
+
+
+def _merge_unique_file_events(*groups):
+    merged = []
+    seen = set()
+
+    for group in groups:
+        if not isinstance(group, list):
+            continue
+
+        for item in group:
+            key = _file_event_dedupe_key(item)
+            if not key or key in seen:
+                continue
+
+            seen.add(key)
+            merged.append(item)
+
+    return merged
+
+
 # Configure CORS for Socket.IO
 SOCKETIO_CORS_ORIGINS = "*" if CORS_ALLOW_ORIGIN == ["*"] else CORS_ALLOW_ORIGIN
 
@@ -887,8 +918,10 @@ def get_event_emitter(request_info, update_db=True):
                     message_id,
                 )
 
-                files = event_payload.get("files", [])
-                files.extend(message.get("files", []))
+                files = _merge_unique_file_events(
+                    event_payload.get("files", []),
+                    message.get("files", []),
+                )
 
                 await asyncio.to_thread(
                     Chats.upsert_message_to_chat_by_id_and_message_id,

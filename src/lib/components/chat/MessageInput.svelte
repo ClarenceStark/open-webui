@@ -483,6 +483,14 @@
 			$models.find((m) => m.id === model)?.info?.meta?.capabilities?.image_generation ?? true
 	);
 
+	const isCodexModelId = (modelId: string) =>
+		modelId === 'gpt-5.5' || modelId === 'gpt-5.4' || modelId.startsWith('codex/');
+
+	$: selectedModelIdsForFeatures = atSelectedModel?.id ? [atSelectedModel.id] : selectedModels;
+	$: selectedModelsAreCodex =
+		selectedModelIdsForFeatures.length > 0 &&
+		selectedModelIdsForFeatures.every((modelId) => isCodexModelId(modelId));
+
 	let codeInterpreterCapableModels = [];
 	$: codeInterpreterCapableModels = (
 		atSelectedModel?.id ? [atSelectedModel.id] : selectedModels
@@ -508,10 +516,10 @@
 
 	let showImageGenerationButton = false;
 	$: showImageGenerationButton =
-		(atSelectedModel?.id ? [atSelectedModel.id] : selectedModels).length ===
-			imageGenerationCapableModels.length &&
-		$config?.features?.enable_image_generation &&
-		($_user.role === 'admin' || $_user?.permissions?.features?.image_generation);
+		selectedModelsAreCodex ||
+		(selectedModelIdsForFeatures.length === imageGenerationCapableModels.length &&
+			$config?.features?.enable_image_generation &&
+			($_user.role === 'admin' || $_user?.permissions?.features?.image_generation));
 
 	const hasFallbackTerminal = () => {
 		return ($terminalServers ?? []).some((terminal) => terminal?.id || terminal?.url);
@@ -1225,27 +1233,35 @@
 							dir={$settings?.chatDirection ?? 'auto'}
 						>
 							{#if atSelectedModel !== undefined}
-								<div class="chat-shell-targeted-model px-3 pt-2 text-left w-full flex flex-col z-10">
+								<div
+									class="chat-shell-targeted-model px-3 pt-2 text-left w-full flex flex-col z-10"
+								>
 									<div class="flex items-center justify-between w-full">
 										<div class="pl-[1px] flex items-center gap-2 text-sm">
 											<img
 												alt="model profile"
-												class="size-3.5 max-w-[28px] object-cover rounded-full {shouldUseOpenAILogo(atSelectedModel) ? 'dark:invert' : ''}"
+												class="size-3.5 max-w-[28px] object-cover rounded-full {shouldUseOpenAILogo(
+													atSelectedModel
+												)
+													? 'dark:invert'
+													: ''}"
 												src={getModelAvatarSrc(
 													$models.find((model) => model.id === atSelectedModel.id),
 													$i18n.language
 												)}
 											/>
 											<div class="translate-y-[0.5px]">
-												<span class="">{getModelDisplayName(atSelectedModel.name, atSelectedModel.id)}</span>
+												<span class=""
+													>{getModelDisplayName(atSelectedModel.name, atSelectedModel.id)}</span
+												>
 											</div>
 										</div>
-											<div>
-												<button
-													class="flex items-center text-[var(--chat-shell-text-muted)]"
-													on:click={() => {
-														atSelectedModel = undefined;
-													}}
+										<div>
+											<button
+												class="flex items-center text-[var(--chat-shell-text-muted)]"
+												on:click={() => {
+													atSelectedModel = undefined;
+												}}
 											>
 												<XMark />
 											</button>
@@ -1255,7 +1271,10 @@
 							{/if}
 
 							{#if files.length > 0}
-								<div class="mx-2 mt-2.5 pb-1.5 flex items-center flex-wrap gap-2" dir={$settings?.chatDirection ?? 'auto'}>
+								<div
+									class="mx-2 mt-2.5 pb-1.5 flex items-center flex-wrap gap-2"
+									dir={$settings?.chatDirection ?? 'auto'}
+								>
 									{#each files as file, fileIdx}
 										{#if file.type === 'image' || (file?.content_type ?? '').startsWith('image/')}
 											{@const fileUrl =
@@ -1547,9 +1566,11 @@
 									<InputMenu
 										bind:files
 										bind:webSearchEnabled
+										bind:imageGenerationEnabled
 										selectedModels={atSelectedModel ? [atSelectedModel.id] : selectedModels}
 										{fileUploadCapableModels}
 										{showWebSearchButton}
+										{showImageGenerationButton}
 										{screenCaptureHandler}
 										{inputFilesHandler}
 										uploadFilesHandler={() => {
@@ -1720,8 +1741,7 @@
 													type="button"
 													class="chat-shell-toggle-pill group p-[7px] flex gap-1.5 items-center text-sm transition-colors duration-300 max-w-full overflow-hidden {codeInterpreterEnabled
 														? 'chat-shell-toggle-pill-active'
-														: ''} {($settings?.highContrastMode ??
-													false)
+														: ''} {($settings?.highContrastMode ?? false)
 														? 'm-1'
 														: 'focus:outline-hidden rounded-full'}"
 												>
@@ -1784,8 +1804,8 @@
 											</Tooltip>
 										{/if}
 
-											{#if !history?.currentId || history.messages[history.currentId]?.done == true}
-												{#if $_user?.role === 'admin' || ($_user?.permissions?.chat?.stt ?? true)}
+										{#if !history?.currentId || history.messages[history.currentId]?.done == true}
+											{#if $_user?.role === 'admin' || ($_user?.permissions?.chat?.stt ?? true)}
 												<!-- {$i18n.t('Record voice')} -->
 												<Tooltip content={$i18n.t('Dictate')}>
 													<button
@@ -1893,8 +1913,8 @@
 																	$i18n.t('Permission denied when accessing media devices')
 																);
 															}
-															}}
-														>
+														}}
+													>
 														<Voice className="size-5" strokeWidth="2.5" />
 													</button>
 												</Tooltip>
@@ -1908,7 +1928,8 @@
 												>
 													<button
 														id="send-message-button"
-														class="chat-shell-send-button {!(prompt === '' && files.length === 0) || uploadPending
+														class="chat-shell-send-button {!(prompt === '' && files.length === 0) ||
+														uploadPending
 															? ''
 															: 'chat-shell-send-button-disabled'} transition rounded-full p-1.5 self-center"
 														type="submit"
