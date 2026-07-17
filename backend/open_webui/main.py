@@ -2116,12 +2116,18 @@ async def list_tasks_by_chat_id_endpoint(
 ):
     chat = Chats.get_chat_by_id(chat_id)
     if chat is None or chat.user_id != user.id:
-        return {"task_ids": []}
+        return {"task_ids": [], "codex_active": False, "codex_turn": None}
 
     task_ids = await list_task_ids_by_item_id(request.app.state.redis, chat_id)
+    codex_turn = (chat.chat or {}).get("codex_turn") or {}
+    codex_active = bool(codex_turn.get("active") is True)
 
     log.debug(f"Task IDs for chat {chat_id}: {task_ids}")
-    return {"task_ids": task_ids}
+    return {
+        "task_ids": task_ids,
+        "codex_active": codex_active,
+        "codex_turn": codex_turn if codex_turn else None,
+    }
 
 
 ##################################

@@ -19,6 +19,7 @@ from open_webui.utils.task import (
 )
 from open_webui.utils.auth import get_admin_user, get_verified_user
 from open_webui.constants import TASKS
+from open_webui.models.chats import Chats
 
 from open_webui.routers.pipelines import process_pipeline_inlet_filter
 
@@ -59,8 +60,15 @@ async def check_active_chats(
     """Check which chat IDs have active tasks."""
     from open_webui.tasks import get_active_chat_ids
 
-    active = await get_active_chat_ids(request.app.state.redis, form_data.chat_ids)
-    return {"active_chat_ids": active}
+    active = set(await get_active_chat_ids(request.app.state.redis, form_data.chat_ids))
+    for chat_id in form_data.chat_ids:
+        chat = Chats.get_chat_by_id(chat_id)
+        if chat is None or chat.user_id != user.id:
+            continue
+        if ((chat.chat or {}).get("codex_turn") or {}).get("active") is True:
+            active.add(chat_id)
+
+    return {"active_chat_ids": list(active)}
 
 
 @router.get("/config")

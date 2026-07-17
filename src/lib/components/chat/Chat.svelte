@@ -212,8 +212,13 @@
 	};
 
 	let taskIds: string[] | null = null;
+	let codexTurnActive = false;
+	let codexRequestsInFlight = 0;
+	let codexSyncPollTimer: ReturnType<typeof setTimeout> | null = null;
+	let codexSyncPollInFlight = false;
 	let pendingStreamMessagePatches = new Map();
 	let pendingStreamMessageFrames = new Map();
+	let pendingHistoryCommitFrame: number | null = null;
 	let visualCompletionTimers = new Map();
 	let visualCompletionCapTimers = new Map();
 	let lastVisibleAssistantTexts = new Map();
@@ -543,6 +548,33 @@
 		}
 	};
 
+	const commitHistoryUpdate = (force = false) => {
+		const applyUpdate = () => {
+			history = {
+				...history,
+				messages: { ...(history?.messages ?? {}) }
+			};
+		};
+
+		if (force) {
+			if (pendingHistoryCommitFrame !== null) {
+				cancelAnimationFrame(pendingHistoryCommitFrame);
+				pendingHistoryCommitFrame = null;
+			}
+			applyUpdate();
+			return;
+		}
+
+		if (pendingHistoryCommitFrame !== null) {
+			return;
+		}
+
+		pendingHistoryCommitFrame = requestAnimationFrame(() => {
+			pendingHistoryCommitFrame = null;
+			applyUpdate();
+		});
+	};
+
 	const flushPendingStreamMessagePatch = (messageId) => {
 		const patch = pendingStreamMessagePatches.get(messageId);
 		if (!patch) return;
@@ -609,6 +641,7 @@
 		}
 
 		history.messages[messageId] = normalizeArtifactMessage(message);
+		commitHistoryUpdate();
 	};
 
 	const clearVisualCompletionTimer = (messageId) => {
@@ -776,6 +809,7 @@
 					pseudoDone: true,
 					pseudoDoneDurationSeconds: durationSeconds
 				};
+				commitHistoryUpdate(true);
 			}, 900)
 		);
 	};
@@ -796,6 +830,7 @@
 			pseudoDone: true,
 			pseudoDoneDurationSeconds: durationSeconds
 		};
+		commitHistoryUpdate(true);
 
 		return true;
 	};
@@ -887,26 +922,38 @@
 			if (type === 'chat:active') {
 				const active = data?.active ?? false;
 
-				if (!active) {
+				if (active) {
+					codexTurnActive = selectedModelsAreCodex() || codexTurnActive;
+					generating = true;
+					markCodexTurnActiveInHistory(
+						history,
+						{
+							root_message_id: event.message_id ?? history.currentId,
+							current_message_id: event.message_id ?? history.currentId,
+							started_at: Math.floor(Date.now() / 1000)
+						},
+						true
+					);
+					scheduleCodexSyncPoll(400);
+				} else {
 					clearVisualCompletionTracking(event.message_id);
+					codexTurnActive = false;
 					taskIds = null;
 					generating = false;
 					generationController = null;
 
-					const focusMessageId = getDeepestVisibleMessageId(history, event.message_id);
-					const currentMessage = history.messages[focusMessageId];
-					if (
-						focusMessageId !== event.message_id ||
-						(currentMessage?.role === 'assistant' && currentMessage.done !== true)
-					) {
-						const synced = await syncChatFromServer(event.chat_id, {
-							focusMessageId,
-							emitFinish: true
-						});
+					const focusMessageId = getDeepestVisibleMessageId(
+						history,
+						event.message_id ?? history.currentId
+					);
+					const synced = await syncChatFromServer(event.chat_id, {
+						focusMessageId,
+						emitFinish: true
+					});
 
-						if (!synced && history.messages[focusMessageId]) {
-							history.messages[focusMessageId].done = true;
-						}
+					if (!synced && history.messages[focusMessageId]) {
+						history.messages[focusMessageId].done = true;
+						commitHistoryUpdate(true);
 					}
 
 					await processQueuedMessagesIfIdle();
@@ -918,6 +965,11 @@
 			if (type === 'chat:message:create') {
 				const createdMessage = insertHistoryMessageNode(data?.message);
 				if (createdMessage) {
+					if (isCodexMessage(createdMessage)) {
+						codexTurnActive = true;
+						generating = true;
+						scheduleCodexSyncPoll();
+					}
 					await tick();
 					if (autoScroll) {
 						scheduleScrollToBottom();
@@ -927,6 +979,12 @@
 			}
 
 			let message = history.messages[event.message_id];
+			if (!message && event.message_id && type !== 'chat:message:create') {
+				await syncChatFromServer(event.chat_id, {
+					focusMessageId: event.message_id
+				});
+				message = history.messages[event.message_id];
+			}
 
 			if (message) {
 				if (type !== 'chat:message:error' && message.reconnecting) {
@@ -934,15 +992,39 @@
 				}
 
 				if (type === 'status') {
-					if (message?.statusHistory) {
-						message.statusHistory.push(data);
-					} else {
-						message.statusHistory = [data];
+					const shouldBackfillCompletedCodexStatus =
+						data?.action === 'codex' &&
+						data?.done === true &&
+						isCodexMessage(message) &&
+						!(message.statusHistory ?? []).some(
+							(item) => item?.action === 'codex' && item?.done !== true
+						);
+
+					if (shouldBackfillCompletedCodexStatus) {
+						await syncChatFromServer(event.chat_id, {
+							focusMessageId: event.message_id
+						});
+						message = history.messages[event.message_id] ?? message;
+					}
+
+					appendUniqueStatus(message, data);
+
+					if (data?.action === 'codex') {
+						history.currentId = getDeepestVisibleMessageId(history, event.message_id);
+						if (data?.done === true) {
+							scheduleCodexSyncPoll(400);
+						} else {
+							codexTurnActive = true;
+							generating = true;
+							scheduleCodexSyncPoll();
+						}
 					}
 				} else if (type === 'chat:completion') {
 					chatCompletionEventHandler(data, message, event.chat_id);
 				} else if (type === 'chat:tasks:cancel') {
 					clearVisualCompletionTracking(event.message_id);
+					codexTurnActive = false;
+					generating = false;
 					taskIds = null;
 					const responseMessage = history.messages[history.currentId];
 					// Set all response messages to done
@@ -954,6 +1036,18 @@
 				} else if (type === 'chat:message' || type === 'replace') {
 					message.content = data.content;
 				} else if (type === 'chat:message:update') {
+					const shouldBackfillCompletedCodexMessage =
+						data?.message?.done === true &&
+						isCodexMessage(message) &&
+						!hasStructuredToolOrArtifactActivity(message);
+
+					if (shouldBackfillCompletedCodexMessage) {
+						await syncChatFromServer(event.chat_id, {
+							focusMessageId: event.message_id
+						});
+						message = history.messages[event.message_id] ?? message;
+					}
+
 					message = normalizeArtifactMessage({
 						...message,
 						...(data?.message ?? {})
@@ -1106,6 +1200,7 @@
 				}
 
 				history.messages[event.message_id] = message;
+				commitHistoryUpdate();
 			}
 		}
 	};
@@ -1192,7 +1287,33 @@
 		};
 
 		window.addEventListener('message', onMessageHandler);
-		$socket?.on('events', chatEventHandler);
+		const activeSocket = $socket;
+		let socketWasDisconnected = false;
+		const chatSocketDisconnectHandler = () => {
+			socketWasDisconnected = true;
+		};
+		const chatSocketConnectHandler = async () => {
+			if (!socketWasDisconnected || !$chatId) {
+				return;
+			}
+
+			socketWasDisconnected = false;
+
+			const currentMessage = history?.messages?.[history?.currentId];
+			const shouldResyncActiveChat =
+				generating ||
+				(taskIds ?? []).length > 0 ||
+				(currentMessage?.role === 'assistant' && currentMessage?.done !== true);
+
+			if (shouldResyncActiveChat) {
+				await syncChatFromServer($chatId, {
+					focusMessageId: history.currentId
+				});
+			}
+		};
+		activeSocket?.on('events', chatEventHandler);
+		activeSocket?.on('disconnect', chatSocketDisconnectHandler);
+		activeSocket?.on('connect', chatSocketConnectHandler);
 
 		$audioQueue?.destroy();
 
@@ -1307,7 +1428,9 @@
 				showControlsSubscribe();
 				selectedFolderSubscribe();
 				window.removeEventListener('message', onMessageHandler);
-				$socket?.off('events', chatEventHandler);
+				activeSocket?.off('events', chatEventHandler);
+				activeSocket?.off('disconnect', chatSocketDisconnectHandler);
+				activeSocket?.off('connect', chatSocketConnectHandler);
 				audioQueueInstance?.destroy();
 				audioQueue.set(null);
 			} catch (e) {
@@ -1790,10 +1913,24 @@
 
 				oldSelectedModelIds = structuredClone(selectedModels);
 
-				history =
+				const taskRes = await getTaskIdsByChatId(localStorage.token, $chatId).catch((error) => {
+					return null;
+				});
+				const activeTaskIds = taskRes?.task_ids ?? [];
+				const serverCodexTurn = taskRes?.codex_turn ?? getCodexTurnState(chatContent);
+
+				taskIds = activeTaskIds.length > 0 ? activeTaskIds : null;
+				codexTurnActive = taskRes?.codex_active === true || isCodexTurnStateActive(serverCodexTurn);
+				generating = codexTurnActive || activeTaskIds.length > 0;
+
+				history = normalizeLoadedHistory(
 					(chatContent?.history ?? undefined) !== undefined
 						? chatContent.history
-						: convertMessagesToHistory(chatContent.messages);
+						: convertMessagesToHistory(chatContent.messages)
+				) ?? {
+					messages: {},
+					currentId: null
+				};
 
 				chatTitle.set(chatContent.title);
 
@@ -1803,20 +1940,15 @@
 				autoScroll = true;
 				await tick();
 
-				if (history.currentId) {
+				if (history.currentId && codexTurnActive) {
+					markCodexTurnActiveInHistory(history, serverCodexTurn);
+					scheduleCodexSyncPoll(400);
+				} else if (history.currentId) {
 					for (const message of Object.values(history.messages)) {
 						if (message && message.role === 'assistant') {
 							message.done = true;
 						}
 					}
-				}
-
-				const taskRes = await getTaskIdsByChatId(localStorage.token, $chatId).catch((error) => {
-					return null;
-				});
-
-				if (taskRes) {
-					taskIds = taskRes.task_ids;
 				}
 
 				await tick();
@@ -1854,6 +1986,16 @@
 			return JSON.stringify(value);
 		} catch {
 			return String(value);
+		}
+	};
+
+	const appendUniqueStatus = (message, status) => {
+		const statusHistory = message?.statusHistory ?? [];
+		const statusKey = jsonDedupeKey(status);
+		if (!statusHistory.some((item) => jsonDedupeKey(item) === statusKey)) {
+			message.statusHistory = [...statusHistory, status];
+		} else {
+			message.statusHistory = statusHistory;
 		}
 	};
 
@@ -1896,6 +2038,7 @@
 		}
 
 		history.currentId = incomingMessage.id;
+		commitHistoryUpdate(true);
 		return mergedMessage;
 	};
 
@@ -1913,6 +2056,108 @@
 		}
 
 		return nextMessageId;
+	};
+
+	const getCodexTurnState = (chatContent) => chatContent?.codex_turn ?? null;
+
+	const isCodexTurnStateActive = (turnState) => {
+		if (turnState?.active !== true) {
+			return false;
+		}
+
+		const startedAt = Number(turnState?.started_at ?? 0);
+		if (!Number.isFinite(startedAt) || startedAt <= 0) {
+			return true;
+		}
+
+		return Date.now() / 1000 - startedAt < 12 * 60 * 60;
+	};
+
+	const markCodexTurnActiveInHistory = (
+		_history = history,
+		turnState = null,
+		forceCommit = false
+	) => {
+		const preferredMessageId =
+			turnState?.current_message_id ?? turnState?.root_message_id ?? _history?.currentId;
+		const activeMessageId = getDeepestVisibleMessageId(_history, preferredMessageId);
+		const activeMessage = _history?.messages?.[activeMessageId];
+
+		if (!activeMessage || activeMessage.role !== 'assistant' || !isCodexMessage(activeMessage)) {
+			return false;
+		}
+
+		activeMessage.done = false;
+		delete activeMessage.pseudoDone;
+		delete activeMessage.pseudoDoneDurationSeconds;
+
+		if (
+			!(activeMessage.statusHistory ?? []).some(
+				(item) => item?.action === 'codex' && item?.done !== true
+			)
+		) {
+			appendUniqueStatus(activeMessage, {
+				action: 'codex',
+				description: '工作中',
+				done: false,
+				started_at: turnState?.started_at ?? Math.floor(Date.now() / 1000)
+			});
+		}
+
+		_history.messages[activeMessageId] = activeMessage;
+		_history.currentId = activeMessageId;
+
+		if (forceCommit) {
+			commitHistoryUpdate(true);
+		}
+
+		return true;
+	};
+
+	const shouldPollCodexSync = () =>
+		Boolean(
+			$chatId &&
+				(selectedModelsAreCodex() ||
+					codexTurnActive ||
+					codexRequestsInFlight > 0 ||
+					isCodexMessage(history?.messages?.[history?.currentId])) &&
+				(codexTurnActive || generating || codexRequestsInFlight > 0 || (taskIds ?? []).length > 0)
+		);
+
+	const clearCodexSyncPoll = () => {
+		if (codexSyncPollTimer !== null) {
+			clearTimeout(codexSyncPollTimer);
+			codexSyncPollTimer = null;
+		}
+	};
+
+	const scheduleCodexSyncPoll = (delay = 1200) => {
+		if (codexSyncPollTimer !== null || !shouldPollCodexSync()) {
+			return;
+		}
+
+		codexSyncPollTimer = setTimeout(async () => {
+			codexSyncPollTimer = null;
+
+			if (!shouldPollCodexSync()) {
+				return;
+			}
+
+			if (!codexSyncPollInFlight) {
+				codexSyncPollInFlight = true;
+				try {
+					await syncChatFromServer($chatId, {
+						focusMessageId: history.currentId
+					});
+				} finally {
+					codexSyncPollInFlight = false;
+				}
+			}
+
+			if (shouldPollCodexSync()) {
+				scheduleCodexSyncPoll();
+			}
+		}, delay);
 	};
 
 	const assistantMessageCompletenessScore = (message) => {
@@ -2144,6 +2389,8 @@
 
 		const latestChat = await getChatById(localStorage.token, _chatId).catch(() => null);
 		const chatContent = latestChat?.chat;
+		const serverCodexTurn = getCodexTurnState(chatContent);
+		const serverCodexActive = isCodexTurnStateActive(serverCodexTurn);
 
 		if (!chatContent) {
 			return false;
@@ -2159,9 +2406,62 @@
 			return false;
 		}
 
-		history = nextHistory;
+		const mergedHistory = {
+			...(history ?? {}),
+			...nextHistory,
+			messages: { ...(history?.messages ?? {}) }
+		};
+
+		for (const [messageId, incomingMessage] of Object.entries(nextHistory.messages ?? {})) {
+			const existingMessage = mergedHistory.messages[messageId];
+			mergedHistory.messages[messageId] = mergeHistoryMessage(existingMessage, incomingMessage);
+
+			const parentId = mergedHistory.messages[messageId]?.parentId;
+			if (parentId && mergedHistory.messages[parentId]) {
+				mergedHistory.messages[parentId] = {
+					...mergedHistory.messages[parentId],
+					childrenIds: mergeUniqueList(mergedHistory.messages[parentId].childrenIds, [messageId])
+				};
+			}
+		}
+
+		history = mergedHistory;
 		if (focusMessageId && history.messages[focusMessageId]) {
 			history.currentId = getDeepestVisibleMessageId(history, focusMessageId);
+		}
+
+		const currentMessage = history?.messages?.[history?.currentId];
+		const shouldClearCodexRunState =
+			selectedModelsAreCodex() ||
+			isCodexMessage(currentMessage) ||
+			Boolean(serverCodexTurn?.root_message_id || serverCodexTurn?.current_message_id);
+		const shouldHoldLocalCodexRunState =
+			!serverCodexActive &&
+			codexRequestsInFlight > 0 &&
+			shouldClearCodexRunState &&
+			currentMessage?.role === 'assistant';
+
+		codexTurnActive = serverCodexActive;
+		if (serverCodexActive) {
+			generating = true;
+			markCodexTurnActiveInHistory(history, serverCodexTurn);
+			scheduleCodexSyncPoll();
+		} else if (shouldHoldLocalCodexRunState) {
+			codexTurnActive = true;
+			generating = true;
+			markCodexTurnActiveInHistory(history, {
+				root_message_id: currentMessage.id,
+				current_message_id: currentMessage.id,
+				started_at: Math.floor(Date.now() / 1000)
+			});
+			scheduleCodexSyncPoll();
+		} else if (shouldClearCodexRunState) {
+			generating = false;
+			taskIds = null;
+			clearCodexSyncPoll();
+			if (currentMessage?.role === 'assistant' && currentMessage?.done === true) {
+				clearVisualCompletionTracking(currentMessage.id);
+			}
 		}
 
 		chat = latestChat;
@@ -2187,6 +2487,14 @@
 
 		return true;
 	};
+
+	$: {
+		if (shouldPollCodexSync()) {
+			scheduleCodexSyncPoll();
+		} else {
+			clearCodexSyncPoll();
+		}
+	}
 
 	const mergeHistoryMessage = (existingMessage, incomingMessage) => {
 		if (!existingMessage) {
@@ -3153,6 +3461,23 @@
 			selectedTerminalId.set(activeTerminalId);
 		}
 
+		const isCodexResponse = isCodexModelId(model.id);
+		if (isCodexResponse) {
+			codexRequestsInFlight += 1;
+			codexTurnActive = true;
+			generating = true;
+			markCodexTurnActiveInHistory(
+				history,
+				{
+					root_message_id: responseMessageId,
+					current_message_id: responseMessageId,
+					started_at: Math.floor(Date.now() / 1000)
+				},
+				true
+			);
+			scheduleCodexSyncPoll(400);
+		}
+
 		const res = await generateOpenAIChatCompletion(
 			localStorage.token,
 			{
@@ -3244,17 +3569,40 @@
 			history.messages[responseMessageId] = responseMessage;
 			history.currentId = responseMessageId;
 
+			if (isCodexResponse) {
+				codexTurnActive = false;
+				generating = false;
+				taskIds = null;
+				clearCodexSyncPoll();
+			}
+
 			return null;
 		});
+
+		if (isCodexResponse) {
+			codexRequestsInFlight = Math.max(0, codexRequestsInFlight - 1);
+			if (
+				codexTurnActive ||
+				generating ||
+				isCodexMessage(history?.messages?.[history?.currentId])
+			) {
+				scheduleCodexSyncPoll(400);
+			}
+		}
 
 		if (res) {
 			if (res.error) {
 				await handleOpenAIError(res.error, responseMessage);
 			} else {
-				if (taskIds) {
-					taskIds.push(res.task_id);
-				} else {
-					taskIds = [res.task_id];
+				if (res.task_id) {
+					if (taskIds) {
+						taskIds.push(res.task_id);
+					} else {
+						taskIds = [res.task_id];
+					}
+				}
+				if (isCodexResponse) {
+					scheduleCodexSyncPoll(400);
 				}
 			}
 		}
@@ -3306,9 +3654,7 @@
 	};
 
 	const stopResponse = async () => {
-		const isCodexModel = selectedModelIds.some(
-			(modelId) => modelId === 'gpt-5.4' || modelId.startsWith('codex/')
-		);
+		const isCodexModel = selectedModelIds.some((modelId) => isCodexModelId(modelId));
 
 		if (isCodexModel && $chatId) {
 			const interruptRes = await fetch(`${WEBUI_API_BASE_URL}/codex/interrupt/${$chatId}`, {
@@ -3331,6 +3677,8 @@
 				});
 
 			if (interruptRes?.status) {
+				codexTurnActive = false;
+				generating = false;
 				taskIds = null;
 			}
 		}
@@ -3649,6 +3997,11 @@
 
 	onDestroy(() => {
 		restoreChatShellTheme();
+		clearCodexSyncPoll();
+		if (pendingHistoryCommitFrame !== null) {
+			cancelAnimationFrame(pendingHistoryCommitFrame);
+			pendingHistoryCommitFrame = null;
+		}
 		for (const frame of pendingStreamMessageFrames.values()) {
 			cancelAnimationFrame(frame);
 		}

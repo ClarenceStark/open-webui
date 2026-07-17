@@ -468,8 +468,8 @@ def _prepare_codex_turn_input(
     text_segments = _collect_text_segments(content)
     image_references = _extract_image_references(content)
 
-    attachment_dir = workspace / "inputs" / _sanitize_workspace_component(
-        message_id, "message"
+    attachment_dir = (
+        workspace / "inputs" / _sanitize_workspace_component(message_id, "message")
     )
     mounted_files: list[dict[str, Any]] = []
     copied_file_paths: dict[str, str] = {}
@@ -531,9 +531,7 @@ def _prepare_codex_turn_input(
         if reference.startswith("data:image/"):
             image_bytes, mime_type = _decode_data_url(reference)
             extension = mimetypes.guess_extension(mime_type) or ".png"
-            destination = attachment_dir / (
-                f"inline_image_{index}{extension}"
-            )
+            destination = attachment_dir / (f"inline_image_{index}{extension}")
             destination.write_bytes(image_bytes)
             local_image_paths.append(str(destination))
             mounted_files.append(
@@ -602,7 +600,11 @@ def _unwrap_shell_command(command: str) -> str:
 
 def _split_command_segments(command: str) -> list[str]:
     normalized = _unwrap_shell_command(command).replace("\n", " && ")
-    return [segment.strip() for segment in re.split(r"\s*(?:&&|\|\||;|\|)\s*", normalized) if segment.strip()]
+    return [
+        segment.strip()
+        for segment in re.split(r"\s*(?:&&|\|\||;|\|)\s*", normalized)
+        if segment.strip()
+    ]
 
 
 def _tokenize_command(segment: str) -> list[str]:
@@ -737,18 +739,70 @@ async def _persist_codex_thread_id(chat_id: str, thread_id: str) -> None:
     await asyncio.to_thread(Chats.update_chat_by_id, chat_id, payload)
 
 
+async def _persist_codex_turn_state(
+    chat_id: str,
+    *,
+    active: bool,
+    root_message_id: str | None = None,
+    current_message_id: str | None = None,
+    turn_id: str | None = None,
+    error: str | None = None,
+) -> None:
+    chat = await asyncio.to_thread(Chats.get_chat_by_id, chat_id)
+    if chat is None:
+        return
+
+    payload = dict(chat.chat or {})
+    turn_state = dict(payload.get("codex_turn") or {})
+    now = int(time.time())
+
+    if active:
+        turn_state.update(
+            {
+                "active": True,
+                "root_message_id": root_message_id,
+                "current_message_id": current_message_id or root_message_id,
+                "started_at": now,
+            }
+        )
+        if turn_id:
+            turn_state["turn_id"] = turn_id
+        turn_state.pop("ended_at", None)
+        turn_state.pop("error", None)
+    else:
+        if not turn_state:
+            turn_state = {
+                "root_message_id": root_message_id,
+                "current_message_id": current_message_id or root_message_id,
+            }
+        turn_state["active"] = False
+        turn_state["ended_at"] = now
+        if current_message_id:
+            turn_state["current_message_id"] = current_message_id
+        if error:
+            turn_state["error"] = error
+
+    payload["codex_turn"] = turn_state
+    await asyncio.to_thread(Chats.update_chat_by_id, chat_id, payload)
+
+
 async def _load_chat_message(chat_id: str, message_id: str | None) -> dict[str, Any]:
     if not chat_id or not message_id:
         return {}
 
-    return await asyncio.to_thread(
-        Chats.get_message_by_id_and_message_id,
-        chat_id,
-        message_id,
-    ) or {}
+    return (
+        await asyncio.to_thread(
+            Chats.get_message_by_id_and_message_id,
+            chat_id,
+            message_id,
+        )
+        or {}
+    )
 
 
-def _build_codex_message(base_message: dict[str, Any], message_id: str, parent_id: str | None) -> dict[str, Any]:
+def _build_codex_message(
+    base_message: dict[str, Any], message_id: str, parent_id: str | None
+) -> dict[str, Any]:
     message = {
         "id": message_id,
         "parentId": parent_id,
@@ -832,6 +886,13 @@ async def _emit_to_message(
     await event_emitter(payload)
 
 
+def _has_visible_agent_output(message_state: dict[str, Any]) -> bool:
+    return any(
+        isinstance(content, str) and content.strip()
+        for content in message_state.get("item_contents", {}).values()
+    )
+
+
 async def translate_and_emit(
     notification,
     event_emitter,
@@ -842,7 +903,9 @@ async def translate_and_emit(
     payload = notification.payload
 
     if method == "item/agentMessage/delta":
-        message_id = await _ensure_agent_message(payload.item_id, message_state, event_emitter)
+        message_id = await _ensure_agent_message(
+            payload.item_id, message_state, event_emitter
+        )
         current = message_state["item_contents"].get(payload.item_id, "")
         message_state["item_contents"][payload.item_id] = current + payload.delta
         await _emit_to_message(
@@ -942,7 +1005,9 @@ async def translate_and_emit(
                             ended_at
                             - (
                                 message_state["message_timestamps"].get(message_id)
-                                or _normalize_unix_seconds(message_state["root_message"].get("timestamp"))
+                                or _normalize_unix_seconds(
+                                    message_state["root_message"].get("timestamp")
+                                )
                                 or ended_at
                             ),
                         ),
@@ -970,7 +1035,9 @@ async def translate_and_emit(
         )
         return
 
-    if method == "turn/plan/updated" and isinstance(payload, TurnPlanUpdatedNotification):
+    if method == "turn/plan/updated" and isinstance(
+        payload, TurnPlanUpdatedNotification
+    ):
         await _emit_to_message(
             event_emitter,
             message_state["last_message_id"] or message_state["root_message_id"],
@@ -1089,7 +1156,8 @@ async def codex_chat_completion(
         "item_contents": {},
         "item_started_at": {},
         "message_timestamps": {
-            message_id: _normalize_unix_seconds(root_message.get("timestamp")) or int(time.time())
+            message_id: _normalize_unix_seconds(root_message.get("timestamp"))
+            or int(time.time())
         },
     }
     turn_handle = None
@@ -1097,15 +1165,37 @@ async def codex_chat_completion(
         _snapshot_workspace_files,
         session.workspace,
     )
+    codex_turn_persisted = False
 
     async with session.turn_lock:
         try:
+            await _persist_codex_turn_state(
+                chat_id,
+                active=True,
+                root_message_id=message_id,
+                current_message_id=message_id,
+            )
+            codex_turn_persisted = True
+            await _emit_to_message(
+                event_emitter,
+                message_id,
+                "chat:active",
+                {"active": True},
+            )
+
             turn_handle = await session.thread.turn(
                 turn_input,
                 model=get_model_override(form_data.get("model")),
             )
             session.current_turn = turn_handle
             session.current_turn_id = turn_handle.id
+            await _persist_codex_turn_state(
+                chat_id,
+                active=True,
+                root_message_id=message_id,
+                current_message_id=message_state["last_message_id"] or message_id,
+                turn_id=turn_handle.id,
+            )
 
             async for notification in turn_handle.stream():
                 await translate_and_emit(
@@ -1118,7 +1208,7 @@ async def codex_chat_completion(
             final_message_id = (
                 message_state["last_message_id"] or message_state["root_message_id"]
             )
-            await _upload_codex_workspace_artifacts(
+            uploaded_artifacts = await _upload_codex_workspace_artifacts(
                 request,
                 event_emitter,
                 session.workspace,
@@ -1127,6 +1217,36 @@ async def codex_chat_completion(
                 metadata,
                 user,
             )
+            if not _has_visible_agent_output(message_state) and not uploaded_artifacts:
+                fallback_error = "Codex 本轮未返回任何可显示内容，请重试。"
+                log.warning(
+                    "Codex turn completed without assistant output: chat_id=%s message_id=%s model=%s thread_id=%s turn_id=%s",
+                    chat_id,
+                    final_message_id,
+                    form_data.get("model"),
+                    session.thread_id,
+                    turn_handle.id if turn_handle else None,
+                )
+                await _emit_to_message(
+                    event_emitter,
+                    final_message_id,
+                    "chat:message:error",
+                    {
+                        "error": {
+                            "content": fallback_error,
+                        }
+                    },
+                )
+                await _emit_to_message(
+                    event_emitter,
+                    final_message_id,
+                    "chat:message:update",
+                    {
+                        "message": {
+                            "done": True,
+                        }
+                    },
+                )
             if tasks:
                 task_metadata = {**metadata, "message_id": final_message_id}
                 await background_tasks_handler(
@@ -1144,5 +1264,29 @@ async def codex_chat_completion(
             session.current_turn_id = None
             session.last_active = time.monotonic()
             session.request_bridge.clear()
+            if codex_turn_persisted:
+                final_message_id = message_state["last_message_id"] or message_id
+                await _persist_codex_turn_state(
+                    chat_id,
+                    active=False,
+                    root_message_id=message_id,
+                    current_message_id=final_message_id,
+                )
+                await _emit_to_message(
+                    event_emitter,
+                    final_message_id,
+                    "chat:message:update",
+                    {
+                        "message": {
+                            "done": True,
+                        }
+                    },
+                )
+                await _emit_to_message(
+                    event_emitter,
+                    final_message_id,
+                    "chat:active",
+                    {"active": False},
+                )
 
     return JSONResponse({"status": True})
